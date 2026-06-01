@@ -1,0 +1,30 @@
+# Binarios
+/pipeline
+/bin/
+
+# Datos generados (no versionar el CSV de >1M registros)
+/data/*.csv
+/data/eda_plots/
+CAPTURAS_PENDIENTES.md
+
+# Profiles pprof
+*.prof
+*.pprof
+/profiles/
+
+# Go
+*.test
+*.out
+coverage.html
+vendor/
+
+# Sistema
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

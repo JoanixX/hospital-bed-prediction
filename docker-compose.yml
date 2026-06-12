@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  # Clúster de cómputo concurrente (PC3).
+  cluster:
+    build: .
+    container_name: hbp_cluster
+    ports:
+      - "6060:6060"   # pprof
+    command: ["-workers=8", "-synthetic=1000000", "-pprof=:6060"]
+    volumes:
+      - ./data:/app/data:ro
+    restart: "no"
+
+  # Servicios planificados para PC4 (declarados pero comentados).
+  # api:
+  #   build: ./api
+  #   ports: ["8080:8080"]
+  #   depends_on: [mongo, redis, cluster]
+  #
+  # mongo:
+  #   image: mongo:7
+  #   ports: ["27017:27017"]
+  #   volumes: [mongo_data:/data/db]
+  #
+  # redis:
+  #   image: redis:7-alpine
+  #   ports: ["6379:6379"]
+  #
+  # frontend:
+  #   build: ./frontend
+  #   ports: ["3000:3000"]
+  #   depends_on: [api]
+
+# volumes:
+#   mongo_data:

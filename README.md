@@ -23,7 +23,14 @@ PC3/
 │   └── report/report.go      # reporte agregado
 ├── benchmarks/pipeline_test.go  # go test -bench
 ├── scripts/
-│   ├── generate_data.py      # genera dataset >1M registros
+│   ├── setup_synthea.ps1     # descarga JAR de Synthea + ejecuta el módulo prostate_cancer
+│   ├── setup_synthea.sh      #   (variante bash)
+│   ├── _common.py            # utilidades compartidas (oversampling, I/O)
+│   ├── generate_patients.py            # data/patients.csv            (>=1.5M)
+│   ├── generate_encounters.py          # data/encounters.csv          (>=1.5M)
+│   ├── generate_observations.py        # data/observations.csv        (>=1.5M)
+│   ├── generate_claims.py              # data/claims.csv              (>=1.5M)
+│   ├── generate_claims_transactions.py # data/claims_transactions.csv (>=1.5M)
 │   ├── eda.py                # análisis exploratorio + gráficos PNG
 │   └── plot_results.py       # gráficos de speedup vs workers
 ├── data/                     # CSVs y gráficos (no versionados)
@@ -36,16 +43,30 @@ PC3/
 ## Requisitos
 
 - Go 1.22 o superior
-- Python 3.10+ con `numpy` y `matplotlib`
+- Python 3.10+ con `numpy`, `pandas` y `matplotlib`
+- Java 11+ (para `synthea-with-dependencies.jar`)
 - Docker 24+ (opcional, sólo para despliegue contenedorizado)
 
 ## Pasos para reproducir los resultados de la PC3
 
-### 1. Generar dataset sintético de >1M registros
+### 1. Generar los datasets simulados (Synthea + oversampling)
+
+Cada dataset se genera con un script independiente. El detalle está en
+[`scripts/README.md`](scripts/README.md).
 
 ```bash
-pip install numpy matplotlib
-python scripts/generate_data.py --n 1500000 --output data/patients.csv
+pip install numpy pandas matplotlib
+
+# 1.a Descarga JAR de Synthea y produce la base cruda (una sola vez)
+powershell -ExecutionPolicy Bypass -File scripts/setup_synthea.ps1   # Windows
+# bash scripts/setup_synthea.sh                                       # Linux/Mac
+
+# 1.b Genera cada dataset (>=1.5M filas cada uno) — un script por dataset
+python scripts/generate_patients.py
+python scripts/generate_encounters.py
+python scripts/generate_observations.py
+python scripts/generate_claims.py
+python scripts/generate_claims_transactions.py
 ```
 
 ### 2. Análisis exploratorio (sección 4.1 del informe)

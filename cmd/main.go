@@ -32,7 +32,14 @@ func main() {
 	synthetic := flag.Int("synthetic", 1_000_000, "tamaño del dataset sintético si dataset='' ")
 	sequential := flag.Bool("sequential", false, "ejecutar en modo secuencial (línea base)")
 	pprofAddr := flag.String("pprof", "localhost:6060", "dirección del servidor pprof")
+	loop := flag.Int("loop", 1, "repetir el procesamiento N veces (útil para capturar perfiles pprof significativos)")
 	flag.Parse()
+
+	// Habilita los perfiles de contención de mutex y de bloqueo (por defecto
+	// están desactivados, lo que hace que /debug/pprof/mutex devuelva un
+	// perfil vacío). Con fracción/tasa = 1 se registra cada evento.
+	runtime.SetMutexProfileFraction(1)
+	runtime.SetBlockProfileRate(1)
 
 	// 1. Servidor pprof asíncrono.
 	go func() {
@@ -79,9 +86,16 @@ func main() {
 		fmt.Printf("\n[mode] EJECUCIÓN CONCURRENTE con %d workers\n", numWorkers)
 	}
 
-	pool := worker.Pool{NumWorkers: numWorkers, Verbose: true}
+	pool := worker.Pool{NumWorkers: numWorkers, Verbose: *loop == 1}
+	if *loop > 1 {
+		fmt.Printf("[loop] repitiendo procesamiento %d veces para profiling\n", *loop)
+	}
 	start := time.Now()
-	results, stats := pool.Process(patients)
+	var results []types.PatientResult
+	var stats []types.WorkerStats
+	for i := 0; i < *loop; i++ {
+		results, stats = pool.Process(patients)
+	}
 	elapsed := time.Since(start)
 
 	// 4. Reporte.

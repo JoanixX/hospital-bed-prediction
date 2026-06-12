@@ -23,7 +23,7 @@ func (p Pool) Process(patients []types.Patient) ([]types.PatientResult, []types.
 		p.NumWorkers = 1
 	}
 
-	results := make(chan types.PatientResult, len(patients))
+	batches := make(chan []types.PatientResult, p.NumWorkers)
 	stats := make(chan types.WorkerStats, p.NumWorkers)
 	var wg sync.WaitGroup
 
@@ -47,7 +47,7 @@ func (p Pool) Process(patients []types.Patient) ([]types.PatientResult, []types.
 			end = len(patients) // el último worker absorbe el remanente
 		}
 		wg.Add(1)
-		go Run(i+1, patients[start:end], results, stats, &wg)
+		go Run(i+1, patients[start:end], batches, stats, &wg)
 		if p.Verbose {
 			fmt.Printf("[pool]   worker %d lanzado -> rango [%d, %d)\n", i+1, start, end)
 		}
@@ -56,15 +56,15 @@ func (p Pool) Process(patients []types.Patient) ([]types.PatientResult, []types.
 	// Cerrar canales cuando todos los workers terminen.
 	go func() {
 		wg.Wait()
-		close(results)
+		close(batches)
 		close(stats)
 	}()
 
-	// Recolectar resultados y métricas.
-	var allResults []types.PatientResult
+	// Recolectar lotes (uno por worker) y métricas.
+	allResults := make([]types.PatientResult, 0, len(patients))
 	var allStats []types.WorkerStats
-	for r := range results {
-		allResults = append(allResults, r)
+	for batch := range batches {
+		allResults = append(allResults, batch...)
 	}
 	for s := range stats {
 		allStats = append(allStats, s)

@@ -11,7 +11,10 @@ CAPTURAS_PENDIENTES.md
 /data/synthea_jar/
 /data/synthea_raw/
 /data/jdk/
+/data/graphviz/
+/data/profiles/
 *.jar
+pipeline.exe
 
 # Profiles pprof
 *.prof

@@ -1,0 +1,139 @@
+# Hospital Bed Prediction — Sistema concurrente PC3
+
+Pipeline concurrente en Go para predicción de mortalidad, supervivencia y
+costo de tratamiento del cáncer de próstata, basado en el patrón **worker
+pool** con goroutines y `channels`. Instrumentado con `net/http/pprof` para
+auditar CPU, memoria y contención de bloqueos.
+
+## Estructura
+
+```
+PC3/
+├── cmd/main.go               # entry point con pprof asíncrono
+├── internal/
+│   ├── loader/loader.go      # carga concurrente del CSV (fan-out/fan-in)
+│   ├── models/               # modelos heurísticos (sustituidos en PC4)
+│   │   ├── mortality.go
+│   │   ├── survival.go
+│   │   └── cost.go
+│   ├── worker/
+│   │   ├── worker.go         # goroutine trabajadora
+│   │   └── pool.go           # coordinador y particionado
+│   ├── types/types.go        # Patient, PatientResult, WorkerStats
+│   └── report/report.go      # reporte agregado
+├── benchmarks/pipeline_test.go  # go test -bench
+├── scripts/
+│   ├── generate_data.py      # genera dataset >1M registros
+│   ├── eda.py                # análisis exploratorio + gráficos PNG
+│   └── plot_results.py       # gráficos de speedup vs workers
+├── data/                     # CSVs y gráficos (no versionados)
+├── Dockerfile
+├── docker-compose.yml
+├── go.mod
+└── README.md
+```
+
+## Requisitos
+
+- Go 1.22 o superior
+- Python 3.10+ con `numpy` y `matplotlib`
+- Docker 24+ (opcional, sólo para despliegue contenedorizado)
+
+## Pasos para reproducir los resultados de la PC3
+
+### 1. Generar dataset sintético de >1M registros
+
+```bash
+pip install numpy matplotlib
+python scripts/generate_data.py --n 1500000 --output data/patients.csv
+```
+
+### 2. Análisis exploratorio (sección 4.1 del informe)
+
+```bash
+python scripts/eda.py --input data/patients.csv --output data/eda_plots
+```
+
+Genera `hist_age.png`, `hist_psa.png`, `hist_income.png`,
+`hist_survival.png`, `bar_race.png`, `bar_marital.png`,
+`heatmap_corr.png`.
+
+### 3. Ejecución del pipeline concurrente
+
+Ejecución por defecto (workers = NumCPU, dataset sintético en memoria):
+
+```bash
+go run ./cmd
+```
+
+Con CSV en disco y 8 workers explícitos:
+
+```bash
+go run ./cmd -workers=8 -dataset=data/patients.csv
+```
+
+Línea base secuencial para la comparación de la sección 4.5:
+
+```bash
+go run ./cmd -sequential -dataset=data/patients.csv
+```
+
+### 4. Profiling con pprof (sección 4.5 del informe)
+
+Mientras el binario corre y mantiene activo `:6060`, abrir otra terminal:
+
+```bash
+# CPU profile (20 s)
+go tool pprof -http=:7070 http://localhost:6060/debug/pprof/profile?seconds=20
+
+# Heap profile
+go tool pprof -http=:7071 http://localhost:6060/debug/pprof/heap
+
+# Mutex contention
+go tool pprof -http=:7072 http://localhost:6060/debug/pprof/mutex
+
+# Goroutines en vivo
+curl http://localhost:6060/debug/pprof/goroutine?debug=1
+```
+
+Capturar el flame graph desde la pestaña *VIEW → Flame Graph*.
+
+### 5. Benchmark formal Go
+
+```bash
+go test -bench=. -benchmem -cpu=1,2,4,8 ./benchmarks/
+```
+
+Anotar los tiempos en `data/bench_results.csv` y generar los gráficos:
+
+```bash
+python scripts/plot_results.py --input data/bench_results.csv --output data/eda_plots
+```
+
+### 6. Despliegue Docker (validación de portabilidad)
+
+```bash
+docker compose build
+docker compose up cluster
+# pprof expuesto en http://localhost:6060/debug/pprof/
+```
+
+## Git Flow
+
+El repositorio sigue el modelo de Driessen (2010):
+
+- `main`     → versiones liberadas (tags por entrega: `pc3`, `pc4`, `tb2`).
+- `develop`  → integración continua.
+- `feature/*` → cada funcionalidad (ej. `feature/worker-pool`, `feature/pprof`).
+- `release/*` → preparación de cada entrega.
+- `hotfix/*`  → arreglos urgentes sobre `main`.
+
+## Roadmap
+
+- **PC3 (este entregable):** cargador concurrente, worker pool,
+  modelos heurísticos, profiling, benchmark.
+- **PC4:** sustitución de modelos heurísticos por XGBoost / Cox /
+  Gradient Boosting reales; API REST con JWT; MongoDB + Redis;
+  comunicación TCP nodo-coordinador.
+- **TB2:** Frontend SPA en React; dashboards de impacto social;
+  evaluación experimental final.

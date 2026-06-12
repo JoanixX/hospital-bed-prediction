@@ -7,6 +7,12 @@
 /data/eda_plots/
 CAPTURAS_PENDIENTES.md
 
+# Synthea (descargado bajo demanda por scripts/setup_synthea.*)
+/data/synthea_jar/
+/data/synthea_raw/
+/data/jdk/
+*.jar
+
 # Profiles pprof
 *.prof
 *.pprof

@@ -1,12 +1,10 @@
 package worker
-
 import (
 	"fmt"
 	"sync"
 
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 )
-
 // Pool coordina la ejecución paralela de N workers sobre el dataset
 // completo. Aplica el patrón map-reduce: particiona los datos (map),
 // despacha cada partición a una goroutine (parallel reduce) y agrega

@@ -9,7 +9,6 @@
 //	go run ./cmd -workers=4 -synthetic=1000000
 //	go run ./cmd -sequential -synthetic=1000000   (línea base)
 package main
-
 import (
 	"flag"
 	"fmt"

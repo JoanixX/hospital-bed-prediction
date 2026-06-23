@@ -48,3 +48,15 @@ type PipelineConfig struct {
 	EnableProfile  bool
 	ProfileAddress string
 }
+
+// ProcessArgs representa los argumentos de entrada para el RPC de procesamiento
+type ProcessArgs struct {
+	Patients []Patient
+}
+
+// ProcessReply representa la respuesta del RPC de procesamiento
+type ProcessReply struct {
+	Results []PatientResult
+	Stats   WorkerStats
+}
+

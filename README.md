@@ -99,6 +99,30 @@ Línea base secuencial para la comparación de la sección 4.5:
 go run ./cmd -sequential -dataset=data/patients.csv
 ```
 
+### 3.b Ejecución del Analizador Estadístico Concurrente y Clúster Distribuido (TCP/RPC)
+
+Para ejecutar el analizador estadístico local que procesa el CSV de forma paralela en tiempo récord:
+```bash
+go run ./cmd/analyzer/main.go -dataset=data/patients.csv -workers=4 -batch=5000
+```
+
+Para levantar el clúster distribuido en red (TCP/RPC) y distribuir la carga:
+
+1. Levanta dos terminales distintas e inicia dos nodos Workers (Esclavos):
+```bash
+# Terminal 1: Inicia Worker 1 en puerto 8081 y pprof en 6061
+go run ./cmd/worker_node/main.go -addr=localhost:8081 -pprof=localhost:6061 -id=1
+
+# Terminal 2: Inicia Worker 2 en puerto 8082 y pprof en 6062
+go run ./cmd/worker_node/main.go -addr=localhost:8082 -pprof=localhost:6062 -id=2
+```
+
+2. En una tercera terminal, ejecuta el nodo Coordinador (Master) para transmitir la carga física en streaming:
+```bash
+go run ./cmd/master/main.go -dataset=data/patients.csv -workers="localhost:8081,localhost:8082" -batch=5000
+```
+
+
 ### 4. Profiling con pprof (sección 4.5 del informe)
 
 Mientras el binario corre y mantiene activo `:6060`, abrir otra terminal:

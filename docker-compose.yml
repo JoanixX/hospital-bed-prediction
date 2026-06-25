@@ -1,7 +1,29 @@
 version: "3.9"
 
 services:
-  # Nodo Master (Orquestador REST API)
+  # Base de Datos NoSQL Persistente (MongoDB)
+  mongodb:
+    image: mongo:7.0
+    container_name: hbp_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - hbp_network
+    restart: always
+
+  # Almacenamiento en Caché de Rápido Acceso (Redis)
+  redis:
+    image: redis:7-alpine
+    container_name: hbp_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - hbp_network
+    restart: always
+
+  # Nodo Master (Orquestador API REST, WebSockets, Caching y Coordinador RPC)
   master:
     build:
       context: .
@@ -11,15 +33,20 @@ services:
     container_name: hbp_master
     ports:
       - "8080:8080"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - REDIS_URI=redis://redis:6379
     command: ["-api", "-workers=worker1:8081,worker2:8081", "-port=:8080"]
     depends_on:
+      - mongodb
+      - redis
       - worker1
       - worker2
     networks:
       - hbp_network
     restart: always
 
-  # Nodo Worker 1
+  # Nodo Worker 1 (Cálculo Concurrente ML)
   worker1:
     build:
       context: .
@@ -32,7 +59,7 @@ services:
       - hbp_network
     restart: always
 
-  # Nodo Worker 2
+  # Nodo Worker 2 (Cálculo Concurrente ML)
   worker2:
     build:
       context: .
@@ -45,7 +72,7 @@ services:
       - hbp_network
     restart: always
 
-  # Frontend Nginx (Servidor Web Estático)
+  # Frontend Nginx (Servidor Web Estático para SPA)
   nginx:
     image: nginx:alpine
     container_name: hbp_frontend
@@ -56,6 +83,9 @@ services:
     networks:
       - hbp_network
     restart: always
+
+volumes:
+  mongodb_data:
 
 networks:
   hbp_network:

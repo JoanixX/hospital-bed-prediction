@@ -12,10 +12,12 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/rpc"
 	"os"
 	"strconv"
@@ -31,6 +33,8 @@ func main() {
 	datasetPath := flag.String("dataset", "data/patients.csv", "Ruta al archivo CSV de pacientes")
 	workersStr := flag.String("workers", "localhost:8081,localhost:8082", "Direcciones TCP/RPC de los workers (separadas por comas)")
 	batchSize := flag.Int("batch", 5000, "Tamaño del bloque de pacientes a enviar por llamada RPC")
+	apiMode := flag.Bool("api", false, "Iniciar el Master en modo API REST")
+	port := flag.String("port", ":8080", "Puerto para el servidor HTTP REST API")
 	flag.Parse()
 
 	startTime := time.Now()
@@ -42,7 +46,11 @@ func main() {
 	}
 
 	fmt.Println("====================================================")
-	fmt.Println("   Master Coordinator - Distribución de Carga RPC   ")
+	if *apiMode {
+		fmt.Println("   Master Coordinator - Modo API REST Activo        ")
+	} else {
+		fmt.Println("   Master Coordinator - Distribución de Carga RPC   ")
+	}
 	fmt.Println("====================================================")
 	fmt.Printf("[master] Conectando a %d nodos workers...\n", len(workerAddrs))
 
@@ -56,6 +64,11 @@ func main() {
 		defer client.Close()
 		fmt.Printf("[master]   - Worker en %s: CONECTADO\n", addr)
 		clients = append(clients, client)
+	}
+
+	if *apiMode {
+		runAPIServer(*port, clients, workerAddrs)
+		return
 	}
 
 	// Abrir el archivo CSV
@@ -248,4 +261,209 @@ func parsePatient(row []string, idx map[string]int) (types.Patient, bool) {
 		HasDied:        died,
 		SurvivalDays:   sd,
 	}, true
+}
+
+// APIServer contiene los clientes RPC de los workers para procesar peticiones web.
+type APIServer struct {
+	clients     []*rpc.Client
+	workerAddrs []string
+}
+
+// runAPIServer inicia el servidor REST HTTP y registra los endpoints
+func runAPIServer(port string, clients []*rpc.Client, workerAddrs []string) {
+	api := &APIServer{
+		clients:     clients,
+		workerAddrs: workerAddrs,
+	}
+
+	// Si el puerto no empieza con ":", lo agregamos
+	if !strings.HasPrefix(port, ":") {
+		port = ":" + port
+	}
+
+	http.HandleFunc("/api/v1/predict", api.PredictHandler)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "healthy", "workers_connected": ` + strconv.Itoa(len(clients)) + `}`))
+	})
+
+	log.Printf("[master-api] Servidor HTTP REST API escuchando en http://localhost%s ...\n", port)
+	if err := http.ListenAndServe(port, nil); err != nil {
+		log.Fatalf("[master-api] Error levantando el servidor HTTP: %v", err)
+	}
+}
+
+// PredictHandler recibe el lote de pacientes en JSON, lo distribuye por RPC a los workers, y responde con los resultados.
+func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
+	// Cabeceras CORS
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Write([]byte(`{"error": "Metodo no permitido. Use POST"}`))
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "Error al leer el cuerpo de la peticion"}`))
+		return
+	}
+
+	var patients []types.Patient
+
+	// Intentar parsear como un array de pacientes
+	err = json.Unmarshal(bodyBytes, &patients)
+	if err != nil {
+		// Intentar parsear como un unico paciente
+		var p types.Patient
+		err2 := json.Unmarshal(bodyBytes, &p)
+		if err2 == nil {
+			patients = []types.Patient{p}
+		} else {
+			// Intentar parsear como un objeto que contiene una lista bajo la clave "patients"
+			var wrapper struct {
+				Patients []types.Patient `json:"patients"`
+			}
+			err3 := json.Unmarshal(bodyBytes, &wrapper)
+			if err3 == nil {
+				wrapperPatients := wrapper.Patients
+				patients = wrapperPatients
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error": "Formato JSON invalido. Se esperaba objeto Patient, array Patient o envoltura {'patients': []}"}`))
+				return
+			}
+		}
+	}
+
+	if len(patients) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "No se enviaron registros de pacientes"}`))
+		return
+	}
+
+	// Asignar IDs automaticos si no se especifican (importante para evitar descartes en el worker)
+	for i := range patients {
+		if patients[i].ID == "" {
+			patients[i].ID = fmt.Sprintf("PAT-API-%d-%d", time.Now().UnixNano(), i+1)
+		}
+	}
+
+	numWorkers := len(api.clients)
+	if numWorkers == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "No hay workers conectados al Master"}`))
+		return
+	}
+
+	// Agrupar/dividir pacientes entre los workers y llamar en paralelo
+	var wg sync.WaitGroup
+	resultsChan := make(chan []types.PatientResult, numWorkers)
+	statsChan := make(chan types.WorkerStats, numWorkers)
+	errChan := make(chan error, numWorkers)
+
+	chunkSize := len(patients) / numWorkers
+	if chunkSize == 0 {
+		chunkSize = 1
+	}
+
+	startTime := time.Now()
+	for i := 0; i < numWorkers; i++ {
+		start := i * chunkSize
+		if start >= len(patients) {
+			break
+		}
+		end := start + chunkSize
+		if i == numWorkers-1 || end > len(patients) {
+			end = len(patients)
+		}
+
+		wg.Add(1)
+		go func(workerIndex int, subset []types.Patient) {
+			defer wg.Done()
+
+			args := types.ProcessArgs{Patients: subset}
+			var reply types.ProcessReply
+
+			client := api.clients[workerIndex]
+			errCall := client.Call("WorkerService.ProcessBatch", &args, &reply)
+			if errCall != nil {
+				log.Printf("[master-api] Error en RPC worker %s: %v. Reintentando en worker secundario...", api.workerAddrs[workerIndex], errCall)
+				
+				// Reintento simple en el siguiente worker
+				fallbackIndex := (workerIndex + 1) % numWorkers
+				errFallback := api.clients[fallbackIndex].Call("WorkerService.ProcessBatch", &args, &reply)
+				if errFallback != nil {
+					log.Printf("[master-api] Fallback a worker %s falló: %v", api.workerAddrs[fallbackIndex], errFallback)
+					errChan <- fmt.Errorf("error llamando al worker %s y fallback: %v", api.workerAddrs[workerIndex], errFallback)
+					return
+				}
+			}
+
+			resultsChan <- reply.Results
+			statsChan <- reply.Stats
+		}(i, patients[start:end])
+	}
+
+	wg.Wait()
+	close(resultsChan)
+	close(statsChan)
+	close(errChan)
+
+	if len(errChan) > 0 && len(resultsChan) == 0 {
+		firstErr := <-errChan
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf(`{"error": "%s"}`, firstErr.Error())))
+		return
+	}
+
+	var allResults []types.PatientResult
+	for res := range resultsChan {
+		allResults = append(allResults, res...)
+	}
+
+	var allStats []types.WorkerStats
+	for stat := range statsChan {
+		allStats = append(allStats, stat)
+	}
+
+	elapsed := time.Since(startTime)
+
+	response := struct {
+		Results        []types.PatientResult `json:"results"`
+		WorkerStats    []types.WorkerStats   `json:"workerStats"`
+		ProcessingTime string                `json:"processingTime"`
+	}{
+		Results:        allResults,
+		WorkerStats:    allStats,
+		ProcessingTime: elapsed.String(),
+	}
+
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Error al codificar la respuesta JSON"}`))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseBytes)
 }

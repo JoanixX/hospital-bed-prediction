@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clínica Distribuidora - Predicción Oncológica & Camas</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-card: rgba(30, 41, 59, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            
+            --color-text-primary: #f8fafc;
+            --color-text-secondary: #94a3b8;
+            
+            --primary: #38bdf8;
+            --primary-glow: rgba(56, 189, 248, 0.2);
+            --primary-dark: #0284c7;
+            
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.15);
+            --warning: #f59e0b;
+            --warning-glow: rgba(245, 158, 11, 0.15);
+            --danger: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.2);
+            --info: #a855f7;
+            
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--color-text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.05) 0%, transparent 40%);
+            overflow-x: hidden;
+        }
+
+        header {
+            padding: 2rem 4rem;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .header-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary), var(--info));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 20px var(--primary-glow);
+        }
+
+        .logo-icon svg {
+            width: 22px;
+            height: 22px;
+            fill: white;
+        }
+
+        .logo-text h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, #ffffff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-text p {
+            font-size: 0.75rem;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+        }
+
+        .system-badge {
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            color: var(--primary);
+            padding: 0.4rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .system-badge span {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success);
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        main {
+            flex: 1;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 3rem;
+        }
+
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            padding: 2.5rem;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .card-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1rem;
+        }
+
+        .card-title svg {
+            width: 24px;
+            height: 24px;
+            color: var(--primary);
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 640px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .input-group.full-width {
+            grid-column: span 2;
+        }
+
+        @media (max-width: 640px) {
+            .input-group.full-width {
+                grid-column: span 1;
+            }
+        }
+
+        label {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+        }
+
+        input, select {
+            background-color: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.8rem 1rem;
+            color: var(--color-text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: var(--transition-smooth);
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 12px var(--primary-glow);
+            background-color: rgba(15, 23, 42, 0.8);
+        }
+
+        .btn-predict {
+            grid-column: span 2;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            border: none;
+            border-radius: 14px;
+            padding: 1.1rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            box-shadow: 0 4px 15px var(--primary-glow);
+        }
+
+        @media (max-width: 640px) {
+            .btn-predict {
+                grid-column: span 1;
+            }
+        }
+
+        .btn-predict:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.4);
+            filter: brightness(1.1);
+        }
+
+        .btn-predict:active {
+            transform: translateY(0);
+        }
+
+        /* Results panel styles */
+        .results-panel {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+        }
+
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            color: var(--color-text-secondary);
+            opacity: 0.3;
+        }
+
+        .empty-state h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.3rem;
+            color: var(--color-text-primary);
+        }
+
+        .empty-state p {
+            font-size: 0.9rem;
+            color: var(--color-text-secondary);
+            max-width: 320px;
+            line-height: 1.5;
+        }
+
+        .prediction-content {
+            display: none;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .metric-cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.25rem;
+        }
+
+        @media (max-width: 480px) {
+            .metric-cards {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .metric-card {
+            background: rgba(15, 23, 42, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--primary);
+        }
+
+        .metric-card.mortality::before { background: var(--danger); }
+        .metric-card.survival::before { background: var(--success); }
+        .metric-card.cost::before { background: var(--warning); }
+        .metric-card.bed::before { background: var(--info); }
+
+        .metric-label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+
+        .metric-desc {
+            font-size: 0.75rem;
+            color: var(--color-text-secondary);
+            line-height: 1.3;
+        }
+
+        /* Gauge */
+        .mortality-gauge-container {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            background: rgba(239, 68, 68, 0.05);
+            border: 1px solid rgba(239, 68, 68, 0.1);
+            border-radius: 20px;
+            padding: 1.5rem;
+        }
+
+        .gauge-circle {
+            position: relative;
+            width: 90px;
+            height: 90px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gauge-circle svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .gauge-circle circle {
+            fill: none;
+            stroke-width: 8;
+        }
+
+        .gauge-circle .circle-bg {
+            stroke: rgba(255, 255, 255, 0.05);
+        }
+
+        .gauge-circle .circle-val {
+            stroke: var(--danger);
+            stroke-dasharray: 251.2;
+            stroke-dashoffset: 251.2;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease-out;
+        }
+
+        .gauge-percentage {
+            position: absolute;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--color-text-primary);
+        }
+
+        .gauge-text h4 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .gauge-text p {
+            font-size: 0.85rem;
+            color: var(--color-text-secondary);
+            line-height: 1.4;
+        }
+
+        /* Social Impact alert */
+        .social-impact-box {
+            border-radius: 20px;
+            padding: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            background: rgba(168, 85, 247, 0.05);
+            border: 1px solid rgba(168, 85, 247, 0.15);
+        }
+
+        .social-impact-box.critical {
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .social-icon {
+            background: rgba(168, 85, 247, 0.15);
+            border-radius: 12px;
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .social-impact-box.critical .social-icon {
+            background: rgba(239, 68, 68, 0.15);
+        }
+
+        .social-icon svg {
+            width: 24px;
+            height: 24px;
+            color: var(--info);
+        }
+
+        .social-impact-box.critical .social-icon svg {
+            color: var(--danger);
+        }
+
+        .social-details h4 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.05rem;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .social-details h4 span {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-weight: 600;
+        }
+
+        .badge-purple { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; }
+        .badge-red { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+
+        .social-details p {
+            font-size: 0.85rem;
+            color: var(--color-text-secondary);
+            line-height: 1.45;
+        }
+
+        /* Diagnostic Metadata */
+        .system-meta {
+            margin-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            padding-top: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            color: var(--color-text-secondary);
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .meta-item svg {
+            width: 14px;
+            height: 14px;
+            color: var(--primary);
+        }
+
+        /* Spinner */
+        .loading-overlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 24px;
+            backdrop-filter: blur(8px);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 1.5rem;
+            z-index: 5;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(56, 189, 248, 0.1);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 500;
+            color: var(--primary);
+            font-size: 1rem;
+            letter-spacing: 0.05em;
+        }
+
+        footer {
+            padding: 2rem;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--color-text-secondary);
+            border-top: 1px solid var(--border-color);
+            margin-top: auto;
+            background: rgba(15, 23, 42, 0.3);
+        }
+
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-container">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <h1>Predicción Clínica & Camas</h1>
+                    <p>Clúster Distribuido RPC Go</p>
+                </div>
+            </div>
+            <div class="system-badge">
+                <span></span> Clúster Activo
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Form Panel -->
+        <div class="card">
+            <div class="card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+                Registro y Datos del Paciente
+            </div>
+            
+            <form id="predictForm" onsubmit="handleFormSubmit(event)">
+                <div class="form-grid">
+                    <!-- Edad -->
+                    <div class="input-group">
+                        <label for="age">Edad del Paciente (años)</label>
+                        <input type="number" id="age" name="age" min="40" max="110" value="68" required>
+                    </div>
+
+                    <!-- PSA Level -->
+                    <div class="input-group">
+                        <label for="psa">Nivel de PSA (ng/mL)</label>
+                        <input type="number" id="psa" name="psa" min="0" max="150" step="0.1" value="12.4" required>
+                    </div>
+
+                    <!-- Ingreso Anual -->
+                    <div class="input-group">
+                        <label for="income">Ingreso Anual (USD $)</label>
+                        <input type="number" id="income" name="income" min="5000" max="300000" value="28000" required>
+                    </div>
+
+                    <!-- Cobertura -->
+                    <div class="input-group">
+                        <label for="coverage">Cobertura de Seguro (%)</label>
+                        <input type="number" id="coverage" name="coverage" min="0" max="100" value="45" required>
+                    </div>
+
+                    <!-- Encuentros -->
+                    <div class="input-group">
+                        <label for="encounters">Visitas Clínicas Previas</label>
+                        <input type="number" id="encounters" name="encounters" min="1" max="100" value="14" required>
+                    </div>
+
+                    <!-- Diagnósticos -->
+                    <div class="input-group">
+                        <label for="diagnoses">Diagnósticos Registrados</label>
+                        <input type="number" id="diagnoses" name="diagnoses" min="1" max="20" value="4" required>
+                    </div>
+
+                    <!-- Raza -->
+                    <div class="input-group">
+                        <label for="race">Raza Declarada</label>
+                        <select id="race" name="race">
+                            <option value="white">Blanca (White)</option>
+                            <option value="black" selected>Afrodescendiente (Black)</option>
+                            <option value="hispanic">Hispana (Hispanic)</option>
+                            <option value="asian">Asiática (Asian)</option>
+                            <option value="other">Otra / No especifica</option>
+                        </select>
+                    </div>
+
+                    <!-- Etnia -->
+                    <div class="input-group">
+                        <label for="ethnicity">Etnia</label>
+                        <select id="ethnicity" name="ethnicity">
+                            <option value="non-hispanic" selected>No Hispano</option>
+                            <option value="hispanic">Hispano</option>
+                        </select>
+                    </div>
+
+                    <!-- Estado Civil -->
+                    <div class="input-group full-width">
+                        <label for="marital">Estado Civil</label>
+                        <select id="marital" name="marital">
+                            <option value="married" selected>Casado(a)</option>
+                            <option value="single">Soltero(a)</option>
+                            <option value="divorced">Divorciado(a)</option>
+                            <option value="widowed">Viudo(a)</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn-predict">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polygon points="10 8 16 12 10 16 10 8"/>
+                        </svg>
+                        Ejecutar Predicción en Clúster
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="card results-panel" id="resultsCard">
+            <!-- Loading Overlay -->
+            <div class="loading-overlay" id="loadingOverlay">
+                <div class="spinner"></div>
+                <div class="loading-text">PROCESANDO EN NODO WORKER...</div>
+            </div>
+
+            <!-- Empty State -->
+            <div class="empty-state" id="emptyState">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <h3>Listo para simulación</h3>
+                <p>Ingrese los datos clínicos a la izquierda y presione el botón para lanzar la llamada de red.</p>
+            </div>
+
+            <!-- Content state -->
+            <div class="prediction-content" id="predictionContent">
+                <div class="card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z" />
+                    </svg>
+                    Resultados de Predicción Analítica
+                </div>
+
+                <!-- Mortality Gauge -->
+                <div class="mortality-gauge-container">
+                    <div class="gauge-circle">
+                        <svg>
+                            <circle class="circle-bg" cx="45" cy="45" r="40"></circle>
+                            <circle class="circle-val" id="mortalityCircle" cx="45" cy="45" r="40"></circle>
+                        </svg>
+                        <div class="gauge-percentage" id="mortalityPercent">0%</div>
+                    </div>
+                    <div class="gauge-text">
+                        <h4>Riesgo de Mortalidad</h4>
+                        <p id="mortalityRiskDesc">Probabilidad estimada de fallecimiento a causa del cáncer de próstata según variables clínicas.</p>
+                    </div>
+                </div>
+
+                <!-- Metrics Grid -->
+                <div class="metric-cards">
+                    <!-- Supervivencia -->
+                    <div class="metric-card survival">
+                        <div class="metric-label">Supervivencia Estimada</div>
+                        <div class="metric-value" id="survivalVal">0 días</div>
+                        <div class="metric-desc">Esperanza de supervivencia en días basándose en el historial y nivel de PSA.</div>
+                    </div>
+
+                    <!-- Costo acumulado -->
+                    <div class="metric-card cost">
+                        <div class="metric-label">Costo de Tratamiento</div>
+                        <div class="metric-value" id="costVal">$0.00</div>
+                        <div class="metric-desc">Costo acumulado proyectado para la atención y manejo oncológico en USD.</div>
+                    </div>
+
+                    <!-- Ocupación de camas -->
+                    <div class="metric-card bed">
+                        <div class="metric-label">Prioridad de Cama</div>
+                        <div class="metric-value" id="bedPriorityVal">Baja</div>
+                        <div class="metric-desc">Prioridad clínica de asignación de cama de hospitalización (Social Bed Priority).</div>
+                    </div>
+
+                    <!-- Días de Hospitalización -->
+                    <div class="metric-card">
+                        <div class="metric-label">Estadía Estimada</div>
+                        <div class="metric-value" id="bedDaysVal">0 días</div>
+                        <div class="metric-desc">Estimación de días necesarios de cama clínica de acuerdo con la comorbilidad y edad.</div>
+                    </div>
+                </div>
+
+                <!-- Social Impact Banner -->
+                <div class="social-impact-box" id="socialImpactBox">
+                    <div class="social-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                    </div>
+                    <div class="social-details">
+                        <h4>Impacto Social Financiero <span id="financialImpactBadge" class="badge-purple">Moderado</span></h4>
+                        <p id="financialImpactDesc">Evaluación del impacto del costo de tratamiento en relación con la cobertura del seguro y el nivel de ingresos.</p>
+                    </div>
+                </div>
+
+                <!-- System Metadata -->
+                <div class="system-meta">
+                    <div class="meta-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                            <line x1="6" y1="6" x2="6.01" y2="6"/>
+                            <line x1="6" y1="18" x2="6.01" y2="18"/>
+                        </svg>
+                        Procesado por: <strong id="metaWorker">Worker Pool</strong>
+                    </div>
+                    <div class="meta-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        Latencia RTT: <strong id="metaTime">0 ms</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 Plataforma de Predicción Hospitalaria Distribuida. Desarrollado en Go con arquitectura concurrente net/rpc.</p>
+    </footer>
+
+    <script>
+        async function handleFormSubmit(event) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const emptyState = document.getElementById('emptyState');
+            const predictionContent = document.getElementById('predictionContent');
+            
+            // Show loading spinner
+            loadingOverlay.style.display = 'flex';
+            
+            // Build payload
+            const payload = {
+                Age: parseInt(form.age.value),
+                PSALevel: parseFloat(form.psa.value),
+                Income: parseFloat(form.income.value),
+                Coverage: parseFloat(form.coverage.value) / 100.0, // Convert percentage to [0,1]
+                NumEncounters: parseInt(form.encounters.value),
+                NumDiagnoses: parseInt(form.diagnoses.value),
+                Race: form.race.value,
+                Ethnicity: form.ethnicity.value,
+                MaritalStatus: form.marital.value,
+                HealthcareCost: 15000.0 // Default clinical cost baseline
+            };
+
+            try {
+                // Fetch call to Master node REST API
+                const response = await fetch('http://localhost:8080/api/v1/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                renderResults(data, payload);
+                
+                // Hide empty state and show results
+                emptyState.style.display = 'none';
+                predictionContent.style.display = 'flex';
+            } catch (error) {
+                console.error("Error al conectar con el servidor Master:", error);
+                alert("Error al conectar con el servidor Master en http://localhost:8080/api/v1/predict. Asegúrese de que el backend esté levantado.");
+            } finally {
+                // Hide loading spinner
+                loadingOverlay.style.display = 'none';
+            }
+        }
+
+        function renderResults(data, inputData) {
+            if (!data.results || data.results.length === 0) return;
+            
+            const result = data.results[0]; // We sent 1 patient, we look at the first result
+            
+            // 1. Mortality Risk Gauge
+            const risk = result.MortalityRisk;
+            const percentage = Math.round(risk * 100);
+            
+            const mortalityPercent = document.getElementById('mortalityPercent');
+            const mortalityCircle = document.getElementById('mortalityCircle');
+            const mortalityRiskDesc = document.getElementById('mortalityRiskDesc');
+            
+            mortalityPercent.innerText = `${percentage}%`;
+            
+            // SVGs circle length dash calculation (circumference = 2 * PI * r = 2 * 3.14159 * 40 = 251.2)
+            const circumference = 251.2;
+            const offset = circumference - (risk * circumference);
+            mortalityCircle.style.strokeDashoffset = offset;
+            
+            // Adjust colors of the gauge and description text depending on risk
+            const gaugeContainer = document.querySelector('.mortality-gauge-container');
+            if (risk > 0.60) {
+                mortalityCircle.style.stroke = 'var(--danger)';
+                gaugeContainer.style.backgroundColor = 'rgba(239, 68, 68, 0.06)';
+                gaugeContainer.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                mortalityRiskDesc.innerText = `Riesgo CRÍTICO. El paciente muestra marcadores avanzados (Nivel PSA: ${inputData.PSALevel} ng/mL, Edad: ${inputData.Age}). Se requiere intervención inmediata y posible hospitalización.`;
+            } else if (risk > 0.30) {
+                mortalityCircle.style.stroke = 'var(--warning)';
+                gaugeContainer.style.backgroundColor = 'rgba(245, 158, 11, 0.06)';
+                gaugeContainer.style.borderColor = 'rgba(245, 158, 11, 0.2)';
+                mortalityRiskDesc.innerText = `Riesgo MODERADO. Monitoreo regular recomendado. Mantener el seguimiento oncológico activo debido a edad y PSA.`;
+            } else {
+                mortalityCircle.style.stroke = 'var(--success)';
+                gaugeContainer.style.backgroundColor = 'rgba(16, 185, 129, 0.06)';
+                gaugeContainer.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+                mortalityRiskDesc.innerText = `Riesgo BAJO. Los marcadores clínicos actuales del paciente están bajo control relativo. Seguir controles rutinarios de antígeno prostático.`;
+            }
+
+            // 2. Survival days to years
+            const survivalDays = Math.round(result.SurvivalEstimate);
+            const survivalYears = (survivalDays / 365).toFixed(1);
+            document.getElementById('survivalVal').innerText = `${survivalYears} años`;
+            
+            // 3. Treatment Cost
+            const cost = result.TreatmentCost;
+            document.getElementById('costVal').innerText = `$${cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+            // 4. Bed occupancy probability (Calculated Social Bed Priority)
+            // Priority formula based on age, encounters, comorbidities and mortality risk
+            const bedPriorityVal = document.getElementById('bedPriorityVal');
+            const bedDaysVal = document.getElementById('bedDaysVal');
+            
+            // Estimate hospitalized days: comorbidity diagnoses + age multiplier
+            let estimatedDays = Math.round(inputData.NumDiagnoses * 1.5 + (inputData.Age > 70 ? (inputData.Age - 70) * 0.4 : 0));
+            if (risk > 0.6) estimatedDays += 7; // Intensive care simulation
+            if (estimatedDays < 0) estimatedDays = 0;
+            bedDaysVal.innerText = `${estimatedDays} días`;
+
+            let priority = "Baja";
+            let priorityColor = "var(--success)";
+            
+            if (risk > 0.60 || (inputData.Age >= 75 && inputData.PSALevel > 15)) {
+                priority = "CRÍTICA";
+                priorityColor = "var(--danger)";
+            } else if (risk > 0.30 || inputData.NumDiagnoses > 5) {
+                priority = "ALTA";
+                priorityColor = "var(--warning)";
+            } else if (risk > 0.15 || inputData.NumEncounters > 12) {
+                priority = "MODERADA";
+                priorityColor = "var(--info)";
+            }
+            
+            bedPriorityVal.innerText = priority;
+            bedPriorityVal.style.color = priorityColor;
+
+            // 5. Social & Financial Impact
+            const socialBox = document.getElementById('socialImpactBox');
+            const impactBadge = document.getElementById('financialImpactBadge');
+            const impactDesc = document.getElementById('financialImpactDesc');
+            
+            // Financial Toxicity: High treatment cost relative to low income & low coverage
+            const patientOutofPocket = cost * (1 - inputData.Coverage);
+            const toxicityRatio = patientOutofPocket / inputData.Income; // percentage of annual income spent out of pocket
+
+            if (toxicityRatio > 0.40) {
+                // High risk of financial ruin
+                socialBox.className = "social-impact-box critical";
+                impactBadge.innerText = "CRÍTICO";
+                impactBadge.className = "badge-red";
+                impactDesc.innerText = `Toxicidad Financiera CRÍTICA. El costo de bolsillo estimado es de $${patientOutofPocket.toLocaleString('en-US', {maximumFractionDigits: 0})} (${Math.round(toxicityRatio * 100)}% de sus ingresos anuales). Califica como Paciente Vulnerable con prioridad para subsidio de copagos y asistencia social.`;
+            } else if (toxicityRatio > 0.15) {
+                socialBox.className = "social-impact-box";
+                impactBadge.innerText = "ELEVADO";
+                impactBadge.className = "badge-purple";
+                impactDesc.innerText = `Toxicidad Financiera ELEVADA. El gasto de bolsillo representa el ${Math.round(toxicityRatio * 100)}% de los ingresos anuales. Se recomienda derivar a programas de apoyo para financiamiento de medicamentos oncológicos.`;
+            } else {
+                socialBox.className = "social-impact-box";
+                impactBadge.innerText = "MODERADO";
+                impactBadge.className = "badge-purple";
+                impactDesc.innerText = `Impacto Financiero controlado. Los ingresos del paciente y su seguro cubren satisfactoriamente el tratamiento proyectado sin generar insolvencia familiar inminente.`;
+            }
+
+            // 6. Metadata audit
+            document.getElementById('metaWorker').innerText = `Worker-${result.WorkerID}`;
+            document.getElementById('metaTime').innerText = data.processingTime || "N/D";
+        }
+    </script>
+</body>
+</html>

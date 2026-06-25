@@ -64,6 +64,7 @@ type TargetColumns struct {
 	PSA          ColStats
 	Cost         ColStats
 	SurvivalDays ColStats
+	Income       ColStats
 }
 
 func NewTargetColumns() TargetColumns {
@@ -72,6 +73,7 @@ func NewTargetColumns() TargetColumns {
 		PSA:          NewColStats(),
 		Cost:         NewColStats(),
 		SurvivalDays: NewColStats(),
+		Income:       NewColStats(),
 	}
 }
 
@@ -80,6 +82,7 @@ func (tc *TargetColumns) Merge(other TargetColumns) {
 	tc.PSA.Merge(other.PSA)
 	tc.Cost.Merge(other.Cost)
 	tc.SurvivalDays.Merge(other.SurvivalDays)
+	tc.Income.Merge(other.Income)
 }
 
 func main() {
@@ -112,6 +115,7 @@ func main() {
 		"psa":             -1,
 		"healthcare_cost": -1,
 		"survival_days":   -1,
+		"income":          -1,
 	}
 	for i, colName := range header {
 		cleanName := strings.ToLower(strings.TrimSpace(colName))
@@ -152,6 +156,7 @@ func main() {
 					parseVal(row, colIdx["psa"], &localStats.PSA)
 					parseVal(row, colIdx["healthcare_cost"], &localStats.Cost)
 					parseVal(row, colIdx["survival_days"], &localStats.SurvivalDays)
+					parseVal(row, colIdx["income"], &localStats.Income)
 				}
 			}
 
@@ -207,6 +212,7 @@ func main() {
 	printReport("Nivel PSA", globalStats.PSA)
 	printReport("Costos Médicos", globalStats.Cost)
 	printReport("Días de supervivencia", globalStats.SurvivalDays)
+	printReport("Ingresos Económicos (Income)", globalStats.Income)
 
 	fmt.Printf("\n[analyzer] Procesamiento completado con éxito en: %v\n", elapsed)
 }

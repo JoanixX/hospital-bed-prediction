@@ -25,9 +25,9 @@ echo "════════════════════════�
 # ── 1. Obtener token JWT ──────────────────────────────────────────────────────
 echo ""
 echo "[1/4] Obteniendo token JWT..."
-TOKEN=$(curl -s -X POST "$API_ADDR/login" \
+TOKEN=$(curl -s -X POST "$API_ADDR/api/v1/login" \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"hospital2024"}' \
+  -d '{"username":"admin","password":"admin123"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
 if [ -z "$TOKEN" ]; then
@@ -40,7 +40,7 @@ echo "Token obtenido: ${TOKEN:0:30}..."
 echo ""
 echo "[2/4] Warmup (5 peticiones para pre-llenar Redis)..."
 for i in $(seq 1 5); do
-  curl -s -o /dev/null -X POST "$API_ADDR/predict" \
+  curl -s -o /dev/null -X POST "$API_ADDR/api/v1/predict" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
     -d '{"id":"WARMUP","age":65,"race":"white","income":55000,"psa_level":8.5,"coverage":0.75,"num_encounters":6,"num_diagnoses":2}'
@@ -55,7 +55,7 @@ hey -n 1000 -c 50 \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
     -d '{"id":"PAT-001","age":65,"race":"white","income":55000,"psa_level":8.5,"coverage":0.75,"num_encounters":6,"num_diagnoses":2}' \
-    "$API_ADDR/predict" \
+    "$API_ADDR/api/v1/predict" \
     | tee "$RESULTS_DIR/scenario_a_cache_${TIMESTAMP}.txt"
 
 # ── 4. Escenario B: payloads variados (cache misses) ─────────────────────────
@@ -66,13 +66,13 @@ hey -n 500 -c 20 \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
     -d '{"id":"PAT-VAR","age":72,"race":"black","income":32000,"psa_level":15.2,"coverage":0.40,"num_encounters":12,"num_diagnoses":4}' \
-    "$API_ADDR/predict" \
+    "$API_ADDR/api/v1/predict" \
     | tee "$RESULTS_DIR/scenario_b_nomatch_${TIMESTAMP}.txt"
 
 # ── 5. Resumen de stats ───────────────────────────────────────────────────────
 echo ""
 echo "── Métricas del sistema post-test ──"
-curl -s "$API_ADDR/stats" | python3 -m json.tool
+curl -s "$API_ADDR/health" | python3 -m json.tool
 
 echo ""
 echo "Resultados guardados en: $RESULTS_DIR/"

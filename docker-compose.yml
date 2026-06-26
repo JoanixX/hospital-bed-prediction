@@ -77,7 +77,7 @@ services:
     image: nginx:alpine
     container_name: hbp_frontend
     ports:
-      - "80:80"
+      - "8082:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
     networks:

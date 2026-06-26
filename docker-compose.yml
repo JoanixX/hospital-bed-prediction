@@ -1,7 +1,8 @@
 version: "3.9"
 
 services:
-  # Base de Datos NoSQL Persistente (MongoDB)
+
+  # ── Base de Datos NoSQL Persistente ────────────────────────────────────────
   mongodb:
     image: mongo:7.0
     container_name: hbp_mongodb
@@ -12,8 +13,13 @@ services:
     networks:
       - hbp_network
     restart: always
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Almacenamiento en Caché de Rápido Acceso (Redis)
+  # ── Caché Redis ────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: hbp_redis
@@ -22,31 +28,13 @@ services:
     networks:
       - hbp_network
     restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Nodo Master (Orquestador API REST, WebSockets, Caching y Coordinador RPC)
-  master:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        APP_DIR: master
-    container_name: hbp_master
-    ports:
-      - "8080:8080"
-    environment:
-      - MONGO_URI=mongodb://mongodb:27017
-      - REDIS_URI=redis://redis:6379
-    command: ["-api", "-workers=worker1:8081,worker2:8081", "-port=:8080"]
-    depends_on:
-      - mongodb
-      - redis
-      - worker1
-      - worker2
-    networks:
-      - hbp_network
-    restart: always
-
-  # Nodo Worker 1 (Cálculo Concurrente ML)
+  # ── Nodo Worker 1 — Cálculo Concurrente ML ────────────────────────────────
   worker1:
     build:
       context: .
@@ -55,11 +43,19 @@ services:
         APP_DIR: worker_node
     container_name: hbp_worker1
     command: ["-addr=:8081", "-pprof=:6061", "-id=1"]
+    expose:
+      - "8081"
+      - "6061"
     networks:
       - hbp_network
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8081 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Nodo Worker 2 (Cálculo Concurrente ML)
+  # ── Nodo Worker 2 — Cálculo Concurrente ML ────────────────────────────────
   worker2:
     build:
       context: .
@@ -68,11 +64,79 @@ services:
         APP_DIR: worker_node
     container_name: hbp_worker2
     command: ["-addr=:8081", "-pprof=:6061", "-id=2"]
+    expose:
+      - "8081"
+      - "6061"
+    networks:
+      - hbp_network
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8081 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Master Coordinator — API REST + WebSockets + RPC Dispatcher ───────────
+  # Expone la API principal en :8080. Se conecta a los workers por nombre
+  # de contenedor (hbp_worker1:8081, hbp_worker2:8081) dentro de la red
+  # Docker. Aguarda a que MongoDB, Redis y ambos workers estén healthy.
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: master
+    container_name: hbp_master
+    ports:
+      - "8080:8080"   # API REST + WebSockets
+      - "6060:6060"   # pprof
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - REDIS_URI=redis://redis:6379
+      - JWT_SECRET=hospital-bed-prod-secret-change-me
+    command:
+      - "-api"
+      - "-workers=hbp_worker1:8081,hbp_worker2:8081"
+      - "-port=:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
     networks:
       - hbp_network
     restart: always
 
-  # Frontend Nginx (Servidor Web Estático para SPA)
+  # ── API REST independiente (Gin + JWT + Redis) ────────────────────────────
+  # Binario separado del master; útil para escalar la capa HTTP
+  # sin tocar el coordinador RPC. Comparte Redis con el master.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: api
+    container_name: hbp_api
+    ports:
+      - "8090:8080"   # Puerto externo 8090 para no colisionar con el master
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASS=
+      - JWT_SECRET=hospital-bed-prod-secret-change-me
+      - GIN_MODE=release
+    command: ["-addr=:8080", "-redis=redis:6379"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - hbp_network
+    restart: always
+
+  # ── Frontend Nginx ─────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
     container_name: hbp_frontend
@@ -83,7 +147,11 @@ services:
     networks:
       - hbp_network
     restart: always
+    depends_on:
+      - master
+      - api
 
+# ── Volúmenes y redes ─────────────────────────────────────────────────────────
 volumes:
   mongodb_data:
 

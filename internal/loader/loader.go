@@ -19,9 +19,9 @@ import (
 
 // LoadConfig agrupa los parámetros del cargador concurrente.
 type LoadConfig struct {
-	Path        string
-	NumWorkers  int
-	BufferSize  int
+	Path       string
+	NumWorkers int
+	BufferSize int
 }
 
 // LoadConcurrent carga el archivo CSV en paralelo. Devuelve el slice
@@ -102,7 +102,6 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 	return patients, discarded, nil
 }
 
-
 // parseAndValidate aplica las reglas de calidad descritas en la
 // sección 4.1 del informe: descarta filas con campos críticos
 // faltantes, valores fuera de rango fisiológico o fechas inválidas.
@@ -136,10 +135,10 @@ func parseAndValidate(row []string) (types.Patient, bool) {
 	cost, _ := strconv.ParseFloat(strings.TrimSpace(row[7]), 64)
 	enc, _ := strconv.Atoi(strings.TrimSpace(row[9]))
 	diag, _ := strconv.Atoi(strings.TrimSpace(row[10]))
-	
+
 	diedStr := strings.TrimSpace(row[11])
 	died := strings.EqualFold(diedStr, "true") || diedStr == "1"
-	
+
 	sd, _ := strconv.Atoi(strings.TrimSpace(row[12]))
 
 	return types.Patient{

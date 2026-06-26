@@ -14,10 +14,10 @@ import (
 
 // Métricas agregadas en memoria para /stats.
 var (
-	totalProcessed  atomic.Int64
-	sumMortality    atomic.Value // float64
-	sumSurvival     atomic.Value // float64
-	sumCost         atomic.Value // float64
+	totalProcessed atomic.Int64
+	sumMortality   atomic.Value // float64
+	sumSurvival    atomic.Value // float64
+	sumCost        atomic.Value // float64
 )
 
 func init() {

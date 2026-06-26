@@ -1,6 +1,6 @@
 // Package report genera el reporte agregado del pipeline en formato
 // legible por consola y, opcionalmente, en JSON para consumo posterior
-// por la API REST (PC4).
+// por la API REST integrada.
 package report
 
 import (

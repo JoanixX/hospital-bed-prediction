@@ -8,6 +8,7 @@
 //	go run ./cmd -workers=8 -dataset=./data/patients.csv
 //	go run ./cmd -sequential -dataset=./data/patients.csv   (línea base)
 package main
+
 import (
 	"flag"
 	"fmt"
@@ -49,7 +50,7 @@ func main() {
 	time.Sleep(150 * time.Millisecond) // dar tiempo al servidor a registrarse
 
 	fmt.Println("====================================================")
-	fmt.Println("  Sistema Distribuido - Cáncer de Próstata (PC3)")
+	fmt.Println("  Sistema Distribuido - Cáncer de Próstata (Integrado)")
 	fmt.Println("  Modelos: Mortalidad | Supervivencia | Costo")
 	fmt.Println("====================================================")
 
@@ -108,4 +109,3 @@ func main() {
 	fmt.Printf("[pprof]   Goroutines: http://%s/debug/pprof/goroutine?debug=1\n", *pprofAddr)
 	time.Sleep(30 * time.Second)
 }
-

@@ -26,6 +26,7 @@ import (
 func Run(
 	id int,
 	partition []types.Patient,
+	normalizedPSAs []float64,
 	batches chan<- []types.PatientResult,
 	stats chan<- types.WorkerStats,
 	wg *sync.WaitGroup,
@@ -36,11 +37,15 @@ func Run(
 	batch := make([]types.PatientResult, len(partition))
 
 	for i, p := range partition {
+		var normPSA float64
+		if i < len(normalizedPSAs) {
+			normPSA = normalizedPSAs[i]
+		}
 		batch[i] = types.PatientResult{
 			PatientID:        p.ID,
-			MortalityRisk:    models.PredictMortality(p),
-			SurvivalEstimate: models.PredictSurvival(p),
-			TreatmentCost:    models.PredictTreatmentCost(p),
+			MortalityRisk:    models.PredictMortality(p, normPSA),
+			SurvivalEstimate: models.PredictSurvival(p, normPSA),
+			TreatmentCost:    models.PredictTreatmentCost(p, normPSA),
 			WorkerID:         id,
 		}
 	}

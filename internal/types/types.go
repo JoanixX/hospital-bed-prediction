@@ -59,4 +59,3 @@ type ProcessReply struct {
 	Results []PatientResult
 	Stats   WorkerStats
 }
-

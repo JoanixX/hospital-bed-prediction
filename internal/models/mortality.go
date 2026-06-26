@@ -11,13 +11,13 @@ import (
 // Utiliza una combinación lineal vectorizada seguida de una función sigmoide.
 func PredictMortality(p types.Patient, normalizedPSA float64) float64 {
 	// Definición de pesos del modelo (Weights)
-	wAge := 1.5           // Edad (a mayor edad, mayor riesgo)
-	wPSA := 3.2           // PSA normalizado (fuerte indicador clínico)
-	wIncome := -0.8       // Nivel socioeconómico (ingreso protege contra mortalidad)
-	wCoverage := -0.5     // Cobertura de salud (a mayor seguro, menor mortalidad)
-	wEncounters := 1.1    // Número de encuentros oncológicos (indica severidad)
-	wDiagnoses := 0.7     // Comorbilidades (número de diagnósticos adicionales)
-	bias := -2.4          // Sesgo / Intercepto
+	wAge := 1.5        // Edad (a mayor edad, mayor riesgo)
+	wPSA := 3.2        // PSA normalizado (fuerte indicador clínico)
+	wIncome := -0.8    // Nivel socioeconómico (ingreso protege contra mortalidad)
+	wCoverage := -0.5  // Cobertura de salud (a mayor seguro, menor mortalidad)
+	wEncounters := 1.1 // Número de encuentros oncológicos (indica severidad)
+	wDiagnoses := 0.7  // Comorbilidades (número de diagnósticos adicionales)
+	bias := -2.4       // Sesgo / Intercepto
 
 	// Normalización y escalado de variables de entrada a rangos uniformes [0, 1]
 	xAge := float64(p.Age) / 100.0

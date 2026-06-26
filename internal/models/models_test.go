@@ -11,11 +11,11 @@ import (
 // escale adecuadamente los niveles de PSA en base a los límites poblacionales.
 func TestConcurrentlyNormalizePSA(t *testing.T) {
 	patients := []types.Patient{
-		{ID: "P1", PSALevel: MinPSABound},             // Debe normalizar a 0.0
-		{ID: "P2", PSALevel: MaxPSABound},             // Debe normalizar a 1.0
+		{ID: "P1", PSALevel: MinPSABound},                       // Debe normalizar a 0.0
+		{ID: "P2", PSALevel: MaxPSABound},                       // Debe normalizar a 1.0
 		{ID: "P3", PSALevel: (MinPSABound + MaxPSABound) / 2.0}, // Debe normalizar a 0.5
-		{ID: "P4", PSALevel: 0.1},                     // Fuera de rango inferior, acotado a 0.0
-		{ID: "P5", PSALevel: 100.0},                   // Fuera de rango superior, acotado a 1.0
+		{ID: "P4", PSALevel: 0.1},                               // Fuera de rango inferior, acotado a 0.0
+		{ID: "P5", PSALevel: 100.0},                             // Fuera de rango superior, acotado a 1.0
 	}
 
 	normalized := ConcurrentlyNormalizePSA(patients)

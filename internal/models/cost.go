@@ -8,13 +8,13 @@ import (
 // para estimar los costos acumulados de tratamiento médico del paciente.
 func PredictTreatmentCost(p types.Patient, normalizedPSA float64) float64 {
 	// Definición de pesos del modelo (Weights en USD)
-	wAge := 6000.0        // +$6000 USD para pacientes de avanzada edad (escala 0-1)
-	wPSA := 28000.0       // +$28000 USD para niveles máximos de PSA (severidad)
-	wIncome := 10000.0    // +$10000 USD por acceso a tratamientos costosos (escala 0-1)
-	wCoverage := 6000.0   // +$6000 USD por acceso médico ampliado (escala 0-1)
+	wAge := 6000.0         // +$6000 USD para pacientes de avanzada edad (escala 0-1)
+	wPSA := 28000.0        // +$28000 USD para niveles máximos de PSA (severidad)
+	wIncome := 10000.0     // +$10000 USD por acceso a tratamientos costosos (escala 0-1)
+	wCoverage := 6000.0    // +$6000 USD por acceso médico ampliado (escala 0-1)
 	wEncounters := 14000.0 // +$14000 USD por alta frecuencia de encuentros clínicos (escala 0-1)
-	wDiagnoses := 11000.0 // +$11000 USD por comorbilidades (escala 0-1)
-	bias := 6000.0        // Costo clínico base de hospitalización
+	wDiagnoses := 11000.0  // +$11000 USD por comorbilidades (escala 0-1)
+	bias := 6000.0         // Costo clínico base de hospitalización
 
 	// Escalado de variables de entrada a rangos uniformes
 	xAge := float64(p.Age) / 100.0

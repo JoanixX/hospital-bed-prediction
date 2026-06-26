@@ -4,7 +4,7 @@
 package worker
 
 import (
-	"sync"
+	"sync" 
 	"time"
 
 	"github.com/JoanixX/hospital-bed-prediction/internal/models"

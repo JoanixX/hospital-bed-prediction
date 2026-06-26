@@ -1,5 +1,5 @@
 # ---- build stage ----
-FROM golang:1.22-alpine AS builder
+FROM golang:alpine AS builder
 ARG APP_DIR=master
 WORKDIR /src
 COPY go.mod ./

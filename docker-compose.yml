@@ -3,7 +3,7 @@ version: "3.9"
 services:
   # Base de Datos NoSQL Persistente (MongoDB)
   mongodb:
-    image: mongo:7.0
+    image: mongo:4.4
     container_name: hbp_mongodb
     ports:
       - "27017:27017"
@@ -77,7 +77,7 @@ services:
     image: nginx:alpine
     container_name: hbp_frontend
     ports:
-      - "80:80"
+      - "8082:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
     networks:

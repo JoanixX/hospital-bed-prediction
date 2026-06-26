@@ -26,6 +26,7 @@ import (
 func Run(
 	id int,
 	partition []types.Patient,
+	normalizedPSAs []float64,
 	batches chan<- []types.PatientResult,
 	stats chan<- types.WorkerStats,
 	wg *sync.WaitGroup,
@@ -36,16 +37,15 @@ func Run(
 	batch := make([]types.PatientResult, len(partition))
 
 	for i, p := range partition {
-		// Normalizar PSA al rango [0,1] con máximo clínico de 20 ng/mL
-		normalizedPSA := p.PSALevel / 20.0
-		if normalizedPSA > 1.0 {
-			normalizedPSA = 1.0
+		var normPSA float64
+		if i < len(normalizedPSAs) {
+			normPSA = normalizedPSAs[i]
 		}
 		batch[i] = types.PatientResult{
 			PatientID:        p.ID,
-			MortalityRisk:    models.PredictMortality(p, normalizedPSA),
-			SurvivalEstimate: models.PredictSurvival(p, normalizedPSA),
-			TreatmentCost:    models.PredictTreatmentCost(p, normalizedPSA),
+			MortalityRisk:    models.PredictMortality(p, normPSA),
+			SurvivalEstimate: models.PredictSurvival(p, normPSA),
+			TreatmentCost:    models.PredictTreatmentCost(p, normPSA),
 			WorkerID:         id,
 		}
 	}

@@ -28,7 +28,7 @@ echo "[1/4] Obteniendo token JWT..."
 TOKEN=$(curl -s -X POST "$API_ADDR/login" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"hospital2024"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+  | python -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
 if [ -z "$TOKEN" ]; then
   echo "ERROR: no se pudo obtener el token. ¿Está corriendo la API?"
@@ -72,7 +72,7 @@ hey -n 500 -c 20 \
 # ── 5. Resumen de stats ───────────────────────────────────────────────────────
 echo ""
 echo "── Métricas del sistema post-test ──"
-curl -s "$API_ADDR/stats" | python3 -m json.tool
+curl -s "$API_ADDR/stats" | python -m json.tool
 
 echo ""
 echo "Resultados guardados en: $RESULTS_DIR/"

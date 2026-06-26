@@ -4,7 +4,7 @@
 package worker
 
 import (
-	"sync"
+	"sync" 
 	"time"
 
 	"github.com/JoanixX/hospital-bed-prediction/internal/models"
@@ -36,11 +36,16 @@ func Run(
 	batch := make([]types.PatientResult, len(partition))
 
 	for i, p := range partition {
+		// Normalizar PSA al rango [0,1] con máximo clínico de 20 ng/mL
+		normalizedPSA := p.PSALevel / 20.0
+		if normalizedPSA > 1.0 {
+			normalizedPSA = 1.0
+		}
 		batch[i] = types.PatientResult{
 			PatientID:        p.ID,
-			MortalityRisk:    models.PredictMortality(p),
-			SurvivalEstimate: models.PredictSurvival(p),
-			TreatmentCost:    models.PredictTreatmentCost(p),
+			MortalityRisk:    models.PredictMortality(p, normalizedPSA),
+			SurvivalEstimate: models.PredictSurvival(p, normalizedPSA),
+			TreatmentCost:    models.PredictTreatmentCost(p, normalizedPSA),
 			WorkerID:         id,
 		}
 	}

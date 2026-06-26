@@ -8,17 +8,32 @@ auditar CPU, memoria y contención de bloqueos.
 ## Estructura
 
 ```
-PC3/
-├── cmd/main.go               # entry point con pprof asíncrono
+PC4/
+├── cmd/
+│   ├── main.go               # entry point del pipeline concurrente + pprof
+│   ├── api/
+│   │   └── main.go           # entry point del servidor HTTP (Gin + Redis + JWT)
+│   ├── analyzer/main.go      # analizador estadístico concurrente
+│   ├── worker_node/main.go   # nodo worker del clúster TCP/RPC
+│   └── master/main.go        # nodo coordinador del clúster TCP/RPC
 ├── internal/
 │   ├── loader/loader.go      # carga concurrente del CSV (fan-out/fan-in)
-│   ├── models/               # modelos heurísticos (sustituidos en PC4)
-│   │   ├── mortality.go
-│   │   ├── survival.go
-│   │   └── cost.go
+│   ├── models/               # modelos predictivos
+│   │   ├── mortality.go      # regresión logística (mortalidad)
+│   │   ├── survival.go       # estimación de supervivencia
+│   │   ├── cost.go           # estimación de costo de tratamiento
+│   │   └── normalization.go  # normalización Min-Max concurrente del PSA
 │   ├── worker/
 │   │   ├── worker.go         # goroutine trabajadora
 │   │   └── pool.go           # coordinador y particionado
+│   ├── api/
+│   │   ├── dto/dto.go        # structs JSON (request/response)
+│   │   ├── handlers/
+│   │   │   ├── predict.go    # POST /predict
+│   │   │   └── stats.go      # GET /stats + POST /login
+│   │   └── middleware/
+│   │       ├── auth.go       # generación y validación JWT (HS256)
+│   │       └── cache.go      # middleware Redis (SHA-256 key, TTL 5 min)
 │   ├── types/types.go        # Patient, PatientResult, WorkerStats
 │   └── report/report.go      # reporte agregado
 ├── benchmarks/pipeline_test.go  # go test -bench
@@ -32,7 +47,8 @@ PC3/
 │   ├── generate_claims.py              # data/claims.csv              (>=1.5M)
 │   ├── generate_claims_transactions.py # data/claims_transactions.csv (>=1.5M)
 │   ├── eda.py                # análisis exploratorio + gráficos PNG
-│   └── plot_results.py       # gráficos de speedup vs workers
+│   ├── plot_results.py       # gráficos de speedup vs workers
+│   └── load_test.sh          # prueba de carga con hey (Tarea 9)
 ├── data/                     # CSVs y gráficos (no versionados)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -163,13 +179,84 @@ docker compose up cluster
 # pprof expuesto en http://localhost:6060/debug/pprof/
 ```
 
+## API REST (PC4)
+
+### Iniciar el servidor
+
+```bash
+# Requisito: Redis corriendo en localhost:6379
+docker run -p 6379:6379 redis:alpine
+
+# Levantar la API
+go run ./cmd/api
+```
+
+Variables de entorno opcionales:
+
+| Variable     | Default                        | Descripción                     |
+|--------------|--------------------------------|---------------------------------|
+| `JWT_SECRET` | `hospital-bed-dev-secret-...`  | Clave HMAC para firmar tokens   |
+| `REDIS_ADDR` | `localhost:6379`               | Dirección del servidor Redis    |
+| `REDIS_PASS` | _(vacío)_                      | Contraseña de Redis             |
+
+### Endpoints
+
+| Método | Ruta       | Auth | Descripción                          |
+|--------|------------|------|--------------------------------------|
+| POST   | `/login`   | No   | Obtiene un JWT (válido 24 h)         |
+| POST   | `/predict` | JWT  | Predicción de mortalidad/supervivencia/costo |
+| GET    | `/stats`   | No   | Métricas agregadas del sistema       |
+
+### Uso desde PowerShell (Windows)
+
+**1. Obtener token:**
+```powershell
+$response = Invoke-RestMethod -Method POST -Uri "http://localhost:8080/login" -ContentType "application/json" -Body '{"username":"admin","password":"hospital2024"}'
+$token = $response.token
+```
+
+**2. Hacer una predicción:**
+```powershell
+Invoke-RestMethod -Method POST -Uri "http://localhost:8080/predict" -ContentType "application/json" -Headers @{ Authorization = "Bearer $token" } -Body '{"age":65,"race":"white","income":55000,"psa_level":8.5,"coverage":0.75,"num_encounters":6,"num_diagnoses":2}'
+```
+
+**3. Ver métricas del sistema:**
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/stats"
+```
+
+### Respuesta de `/predict`
+
+```json
+{
+  "patient_id":        "API-REQUEST",
+  "mortality_risk":    0.399,
+  "survival_estimate": 2959,
+  "treatment_cost":    38200,
+  "cached":            false
+}
+```
+
+`cached: true` indica que la respuesta fue servida desde Redis sin invocar el pipeline.
+
+### Prueba de carga (Tarea 9)
+
+```bash
+go install github.com/rakyll/hey@latest
+bash scripts/load_test.sh
+```
+
+El script ejecuta dos escenarios: 1000 peticiones con 50 concurrentes (cache hit) y 500 peticiones con 20 concurrentes (cache miss). El objetivo es P99 < 100 ms.
+
+---
+
 ## Git Flow
 
 El repositorio sigue el modelo de Driessen (2010):
 
 - `main`     → versiones liberadas (tags por entrega: `pc3`, `pc4`, `tb2`).
 - `develop`  → integración continua.
-- `feature/*` → cada funcionalidad (ej. `feature/worker-pool`, `feature/pprof`).
+- `feature/*` → cada funcionalidad (ej. `feature/worker-pool`, `feature/pprof`, `feature/API`).
 - `release/*` → preparación de cada entrega.
 - `hotfix/*`  → arreglos urgentes sobre `main`.
 

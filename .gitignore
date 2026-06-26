@@ -3,6 +3,7 @@
 /bin/
 /data/*.csv
 /data/eda_plots/
+/data/load_tests_results/
 CAPTURAS_PENDIENTES.md
 
 # Synthea (descargado bajo demanda por scripts/setup_synthea.*)

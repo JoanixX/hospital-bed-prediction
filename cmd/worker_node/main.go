@@ -2,12 +2,6 @@
 // Levanta un servidor RPC sobre TCP que recibe lotes de pacientes,
 // ejecuta un procesamiento local concurrente e intensivo en CPU,
 // y devuelve los resultados junto a las métricas del nodo.
-//
-// Para evitar la contención de memoria en el worker:
-// 1. Los resultados locales se escriben directamente en posiciones precalculadas de un slice compartido
-//    (evitando colisiones o reasignación dinámica de memoria).
-// 2. Se prescinde de locks/mutexes durante el procesamiento de los pacientes.
-// 3. El cómputo intensivo está diseñado para no generar recolector de basura (GC pressure).
 package main
 
 import (
@@ -46,6 +40,9 @@ func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.Proc
 		return nil
 	}
 
+	// 1. Normalización Min-Max concurrente del PSA antes de evaluar los modelos
+	normalizedPSAs := models.ConcurrentlyNormalizePSA(args.Patients)
+
 	// Pre-asignamos el slice con capacidad exacta para evitar re-asignaciones en memoria (contención y GC)
 	results := make([]types.PatientResult, numPatients)
 
@@ -58,7 +55,7 @@ func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.Proc
 		chunkSize = 1
 	}
 
-	// Fan-out local de la CPU del Worker
+	// Fan-out local de la CPU del Worker utilizando goroutines
 	for i := 0; i < numLocalWorkers; i++ {
 		start := i * chunkSize
 		if start >= numPatients {
@@ -70,15 +67,13 @@ func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.Proc
 		}
 
 		wg.Add(1)
-		go func(localWorkerID int, patientsSubset []types.Patient, resultsTarget []types.PatientResult) {
+		go func(localWorkerID int, patientsSubset []types.Patient, normalizedSubset []float64, resultsTarget []types.PatientResult) {
 			defer wg.Done()
 
 			for idx, p := range patientsSubset {
-				// Simulación de entrenamiento/predicción intensiva en CPU.
-				// Evaluamos funciones trigonométricas en bucle para quemar ciclos de CPU
-				// de forma determinista y sin allocations en el heap.
+				// Simulación de cálculo intensivo en CPU para emular entrenamiento/evaluación matricial profunda
 				var cpuBurn float64
-				for k := 0; k < 12000; k++ {
+				for k := 0; k < 5000; k++ {
 					cpuBurn += math.Sin(float64(k)) * math.Cos(float64(p.Age))
 				}
 				_ = cpuBurn // Evitar advertencia del compilador
@@ -86,13 +81,13 @@ func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.Proc
 				// Escribimos en el slice en base a su offset aislado sin contención de memoria
 				resultsTarget[idx] = types.PatientResult{
 					PatientID:        p.ID,
-					MortalityRisk:    models.PredictMortality(p),
-					SurvivalEstimate: models.PredictSurvival(p),
-					TreatmentCost:    models.PredictTreatmentCost(p),
+					MortalityRisk:    models.PredictMortality(p, normalizedSubset[idx]),
+					SurvivalEstimate: models.PredictSurvival(p, normalizedSubset[idx]),
+					TreatmentCost:    models.PredictTreatmentCost(p, normalizedSubset[idx]),
 					WorkerID:         ws.ID, // Identificador de este nodo worker
 				}
 			}
-		}(i+1, args.Patients[start:end], results[start:end])
+		}(i+1, args.Patients[start:end], normalizedPSAs[start:end], results[start:end])
 	}
 
 	wg.Wait()
@@ -145,7 +140,7 @@ func main() {
 			log.Printf("[worker-%d] Error al aceptar conexión: %v\n", *workerID, err)
 			continue
 		}
-		// Servir la conexión de forma concurrente para poder recibir múltiples conexiones de ser necesario
+		// Servir la conexión de forma concurrente
 		go rpc.ServeConn(conn)
 	}
 }

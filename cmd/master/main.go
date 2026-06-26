@@ -2,32 +2,66 @@
 // Lee el CSV físico en streaming lote por lote y distribuye los registros
 // uniformemente y de forma concurrente a los nodos Workers usando net/rpc.
 //
-// Para evitar contención de memoria en el Master:
-// 1. No carga el CSV completo en memoria. Lee y procesa fila por fila en un búfer de streaming.
-// 2. Agrupa los pacientes en lotes (ej., 5000) antes de enviarlos por red, disminuyendo el número
-//    de llamadas RPC y reduciendo la contención en los canales de Go.
-// 3. Usa un canal con búfer para los despachadores concurrentes (uno por worker de red).
+// También expone una API REST segura mediante JWT, gestiona almacenamiento persistente
+// en MongoDB y caché en Redis, y transmite telemetría en tiempo real por WebSockets.
 package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/rpc"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/JoanixX/hospital-bed-prediction/internal/db"
 	"github.com/JoanixX/hospital-bed-prediction/internal/report"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/websocket"
 )
+
+// Clave secreta para firmar los tokens JWT
+var jwtKey = []byte("super-secret-key-pcd-2026")
+
+// Upgrader para WebSockets (permitir orígenes de desarrollo CORS)
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+// APIServer contiene los clientes RPC de los workers para procesar peticiones web.
+type APIServer struct {
+	clients        []*rpc.Client
+	workerAddrs    []string
+	mu             sync.Mutex
+	totalRequests  int64
+	totalLatencyNs int64
+	wsClients      map[*websocket.Conn]bool
+	dbEnabled      bool
+}
+
+// Estructuras de login
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token string `json:"token"`
+}
 
 func main() {
 	datasetPath := flag.String("dataset", "data/patients.csv", "Ruta al archivo CSV de pacientes")
@@ -38,6 +72,14 @@ func main() {
 	flag.Parse()
 
 	startTime := time.Now()
+
+	// 1. Inicialización de base de datos y caché
+	dbEnabled := true
+	log.Println("[master] Inicializando bases de datos...")
+	if err := db.InitDB(); err != nil {
+		log.Printf("[master] [WARN] No se pudo conectar a MongoDB o Redis: %v. Continuando en modo degradado (sin base de datos/caché).", err)
+		dbEnabled = false
+	}
 
 	// Parsear direcciones de los workers
 	workerAddrs := strings.Split(*workersStr, ",")
@@ -67,18 +109,17 @@ func main() {
 	}
 
 	if *apiMode {
-		runAPIServer(*port, clients, workerAddrs)
+		runAPIServer(*port, clients, workerAddrs, dbEnabled)
 		return
 	}
 
-	// Abrir el archivo CSV
+	// Modo CLI - Lectura física y distribución
 	file, err := os.Open(*datasetPath)
 	if err != nil {
 		log.Fatalf("[master] Error al abrir el dataset: %v", err)
 	}
 	defer file.Close()
 
-	// Buffer de lectura de 1MB para mitigar el cuello de botella de I/O de disco
 	bufReader := bufio.NewReaderSize(file, 1*1024*1024)
 	csvReader := csv.NewReader(bufReader)
 
@@ -89,7 +130,6 @@ func main() {
 	}
 	fmt.Printf("[master] Cabecera leída: %v\n", header)
 	colIdx := indexColumns(header)
-	fmt.Printf("[master] Mapa de columnas: %v\n", colIdx)
 
 	// Canales de control
 	batchesCh := make(chan []types.Patient, len(clients)*4)
@@ -98,23 +138,34 @@ func main() {
 
 	var wgDispatchers sync.WaitGroup
 
-	// Lanzar un despachador goroutine por cada conexión a worker
-	// Esto implementa un balanceo de carga dinámico auto-regulado.
-	// Si un worker es más rápido, procesará y vaciará el canal batchesCh más rápido.
+	// Lanzar dispatchers
 	for i, client := range clients {
 		wgDispatchers.Add(1)
 		go func(workerID int, c *rpc.Client, addr string) {
 			defer wgDispatchers.Done()
 			for batch := range batchesCh {
+				// Para propósitos de este script batch, procesamos directamente
 				args := types.ProcessArgs{Patients: batch}
 				var reply types.ProcessReply
 
 				err := c.Call("WorkerService.ProcessBatch", &args, &reply)
 				if err != nil {
 					log.Printf("[master] Error en RPC worker %s: %v. Re-encolando lote...\n", addr, err)
-					// Re-encolamos para garantizar tolerancia a fallos parciales
 					batchesCh <- batch
 					continue
+				}
+
+				// Asíncronamente guardar en MongoDB/Redis si están disponibles
+				if dbEnabled {
+					go func(pts []types.Patient, rts []types.PatientResult) {
+						ctx := context.Background()
+						for k, result := range rts {
+							patient := pts[k]
+							key := db.GenerateCacheKey(patient)
+							_ = db.SetCachedPrediction(ctx, key, result, 15*time.Minute)
+							_ = db.SavePrediction(ctx, patient, result)
+						}
+					}(batch, reply.Results)
 				}
 
 				resultsCh <- reply.Results
@@ -123,7 +174,7 @@ func main() {
 		}(i+1, client, workerAddrs[i])
 	}
 
-	// Goroutine Productora: Lee el CSV en streaming y alimenta a los dispatchers
+	// Productora
 	var totalRecordsRead int64
 	var discardedRecords int64
 	go func() {
@@ -158,25 +209,21 @@ func main() {
 			}
 		}
 
-		// Enviar lote remanente
 		if len(currentBatch) > 0 {
 			batchesCh <- currentBatch
 		}
 		log.Printf("[master] Lectura del CSV finalizada. %d registros válidos, %d descartados.\n", totalRecordsRead, discardedRecords)
 	}()
 
-	// Goroutine para cerrar canales de resultados cuando los workers acaben
 	go func() {
 		wgDispatchers.Wait()
 		close(resultsCh)
 		close(statsCh)
 	}()
 
-	// Recolección y agregación final de datos (Map-Reduce consolidado)
 	var allResults []types.PatientResult
 	var allStats []types.WorkerStats
 
-	// Hilo de consumo de resultados
 	var wgAggregator sync.WaitGroup
 	wgAggregator.Add(2)
 
@@ -197,11 +244,8 @@ func main() {
 	wgAggregator.Wait()
 	elapsed := time.Since(startTime)
 
-	// Imprimir el reporte unificado
 	report.Print(allResults, allStats)
-
 	fmt.Printf("\n[master] Procesamiento distribuido completado con éxito en: %v\n", elapsed)
-	fmt.Printf("[master] Throughput del clúster: %.0f pacientes/s\n", float64(len(allResults))/elapsed.Seconds())
 }
 
 // indexColumns mapea los nombres de cabecera a su índice
@@ -213,7 +257,7 @@ func indexColumns(header []string) map[string]int {
 	return m
 }
 
-// parsePatient parsea y valida un registro individual
+// parsePatient parsea y valida un registro clínico
 func parsePatient(row []string, idx map[string]int) (types.Patient, bool) {
 	get := func(key string) string {
 		i, ok := idx[key]
@@ -263,30 +307,31 @@ func parsePatient(row []string, idx map[string]int) (types.Patient, bool) {
 	}, true
 }
 
-// APIServer contiene los clientes RPC de los workers para procesar peticiones web.
-type APIServer struct {
-	clients     []*rpc.Client
-	workerAddrs []string
-}
-
-// runAPIServer inicia el servidor REST HTTP y registra los endpoints
-func runAPIServer(port string, clients []*rpc.Client, workerAddrs []string) {
+// runAPIServer inicia el servidor REST HTTP y WebSockets
+func runAPIServer(port string, clients []*rpc.Client, workerAddrs []string, dbEnabled bool) {
 	api := &APIServer{
 		clients:     clients,
 		workerAddrs: workerAddrs,
+		wsClients:   make(map[*websocket.Conn]bool),
+		dbEnabled:   dbEnabled,
 	}
 
-	// Si el puerto no empieza con ":", lo agregamos
 	if !strings.HasPrefix(port, ":") {
 		port = ":" + port
 	}
 
+	// Endpoints públicos
+	http.HandleFunc("/api/v1/login", api.LoginHandler)
+	http.HandleFunc("/health", api.HealthHandler)
+
+	// Endpoints protegidos por JWT (verificación interna en el Handler)
 	http.HandleFunc("/api/v1/predict", api.PredictHandler)
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "healthy", "workers_connected": ` + strconv.Itoa(len(clients)) + `}`))
-	})
+
+	// WebSockets para monitoreo en tiempo real
+	http.HandleFunc("/api/v1/ws/metrics", api.WSMetricsHandler)
+
+	// Iniciar broadcaster de métricas en tiempo real
+	api.startMetricsBroadcaster()
 
 	log.Printf("[master-api] Servidor HTTP REST API escuchando en http://localhost%s ...\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
@@ -294,12 +339,69 @@ func runAPIServer(port string, clients []*rpc.Client, workerAddrs []string) {
 	}
 }
 
-// PredictHandler recibe el lote de pacientes en JSON, lo distribuye por RPC a los workers, y responde con los resultados.
+// HealthHandler verifica la disponibilidad del clúster
+func (api *APIServer) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status": "healthy", "workers_connected": ` + strconv.Itoa(len(api.clients)) + `, "db_connected": ` + strconv.FormatBool(api.dbEnabled) + `}`))
+}
+
+// LoginHandler autentica al usuario y le expide un token JWT
+func (api *APIServer) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "JSON de login inválido"}`))
+		return
+	}
+
+	// Validación simple
+	if req.Username == "admin" && req.Password == "admin123" {
+		expirationTime := time.Now().Add(24 * time.Hour)
+		claims := &jwt.RegisteredClaims{
+			Subject:   req.Username,
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+		}
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString(jwtKey)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "Error al generar JWT"}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(LoginResponse{Token: tokenString})
+		return
+	}
+
+	w.WriteHeader(http.StatusUnauthorized)
+	w.Write([]byte(`{"error": "Usuario o contraseña inválidos"}`))
+}
+
+// PredictHandler procesa las solicitudes de predicción aplicando seguridad JWT,
+// consulta a caché de Redis y almacenamiento asíncrono en MongoDB.
 func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
 	// Cabeceras CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -309,41 +411,67 @@ func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte(`{"error": "Metodo no permitido. Use POST"}`))
+		w.Write([]byte(`{"error": "Método no permitido. Use POST"}`))
 		return
 	}
 
+	// 1. Verificación de JWT Token
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Token de autorización requerido"}`))
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Formato de token inválido. Use 'Bearer <token>'"}`))
+		return
+	}
+
+	// Validar el token
+	claims := &jwt.RegisteredClaims{}
+	token, err := jwt.ParseWithClaims(parts[1], claims, func(t *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+	if err != nil || !token.Valid {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Token inválido o expirado"}`))
+		return
+	}
+
+	// 2. Lectura del cuerpo del paciente
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "Error al leer el cuerpo de la peticion"}`))
+		w.Write([]byte(`{"error": "Error al leer el cuerpo"}`))
 		return
 	}
 
 	var patients []types.Patient
-
-	// Intentar parsear como un array de pacientes
 	err = json.Unmarshal(bodyBytes, &patients)
 	if err != nil {
-		// Intentar parsear como un unico paciente
+		// Intentar como un único paciente
 		var p types.Patient
 		err2 := json.Unmarshal(bodyBytes, &p)
 		if err2 == nil {
 			patients = []types.Patient{p}
 		} else {
-			// Intentar parsear como un objeto que contiene una lista bajo la clave "patients"
 			var wrapper struct {
 				Patients []types.Patient `json:"patients"`
 			}
 			err3 := json.Unmarshal(bodyBytes, &wrapper)
 			if err3 == nil {
-				wrapperPatients := wrapper.Patients
-				patients = wrapperPatients
+				patients = wrapper.Patients
 			} else {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(`{"error": "Formato JSON invalido. Se esperaba objeto Patient, array Patient o envoltura {'patients': []}"}`))
+				w.Write([]byte(`{"error": "JSON no válido para Patient"}`))
 				return
 			}
 		}
@@ -352,118 +480,243 @@ func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
 	if len(patients) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "No se enviaron registros de pacientes"}`))
+		w.Write([]byte(`{"error": "No se enviaron pacientes"}`))
 		return
 	}
 
-	// Asignar IDs automaticos si no se especifican (importante para evitar descartes en el worker)
+	// Llenar IDs automáticos por seguridad
 	for i := range patients {
 		if patients[i].ID == "" {
 			patients[i].ID = fmt.Sprintf("PAT-API-%d-%d", time.Now().UnixNano(), i+1)
 		}
 	}
 
-	numWorkers := len(api.clients)
-	if numWorkers == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "No hay workers conectados al Master"}`))
-		return
+	predictStart := time.Now()
+	ctx := context.Background()
+
+	// 3. Resolución en Caché de Redis (si está activo)
+	finalResults := make([]types.PatientResult, len(patients))
+	var cacheMissIndices []int
+	var cacheMissPatients []types.Patient
+
+	for i, p := range patients {
+		if api.dbEnabled {
+			key := db.GenerateCacheKey(p)
+			cachedRes, err := db.GetCachedPrediction(ctx, key)
+			if err == nil && cachedRes != nil {
+				// Cache Hit!
+				cachedRes.PatientID = p.ID // Mantener ID de la solicitud actual
+				finalResults[i] = *cachedRes
+				continue
+			}
+		}
+		// Cache Miss o DB apagada
+		cacheMissIndices = append(cacheMissIndices, i)
+		cacheMissPatients = append(cacheMissPatients, p)
 	}
 
-	// Agrupar/dividir pacientes entre los workers y llamar en paralelo
-	var wg sync.WaitGroup
-	resultsChan := make(chan []types.PatientResult, numWorkers)
-	statsChan := make(chan types.WorkerStats, numWorkers)
-	errChan := make(chan error, numWorkers)
-
-	chunkSize := len(patients) / numWorkers
-	if chunkSize == 0 {
-		chunkSize = 1
-	}
-
-	startTime := time.Now()
-	for i := 0; i < numWorkers; i++ {
-		start := i * chunkSize
-		if start >= len(patients) {
-			break
-		}
-		end := start + chunkSize
-		if i == numWorkers-1 || end > len(patients) {
-			end = len(patients)
+	// 4. Despachar Cache Misses al clúster de workers RPC
+	numMissed := len(cacheMissPatients)
+	if numMissed > 0 {
+		numWorkers := len(api.clients)
+		if numWorkers == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "No hay workers de cálculo conectados"}`))
+			return
 		}
 
-		wg.Add(1)
-		go func(workerIndex int, subset []types.Patient) {
-			defer wg.Done()
+		var wg sync.WaitGroup
+		resultsChan := make(chan []types.PatientResult, numWorkers)
+		errChan := make(chan error, numWorkers)
 
-			args := types.ProcessArgs{Patients: subset}
-			var reply types.ProcessReply
+		chunkSize := numMissed / numWorkers
+		if chunkSize == 0 {
+			chunkSize = 1
+		}
 
-			client := api.clients[workerIndex]
-			errCall := client.Call("WorkerService.ProcessBatch", &args, &reply)
-			if errCall != nil {
-				log.Printf("[master-api] Error en RPC worker %s: %v. Reintentando en worker secundario...", api.workerAddrs[workerIndex], errCall)
-				
-				// Reintento simple en el siguiente worker
-				fallbackIndex := (workerIndex + 1) % numWorkers
-				errFallback := api.clients[fallbackIndex].Call("WorkerService.ProcessBatch", &args, &reply)
-				if errFallback != nil {
-					log.Printf("[master-api] Fallback a worker %s falló: %v", api.workerAddrs[fallbackIndex], errFallback)
-					errChan <- fmt.Errorf("error llamando al worker %s y fallback: %v", api.workerAddrs[workerIndex], errFallback)
-					return
-				}
+		for i := 0; i < numWorkers; i++ {
+			start := i * chunkSize
+			if start >= numMissed {
+				break
+			}
+			end := start + chunkSize
+			if i == numWorkers-1 || end > numMissed {
+				end = numMissed
 			}
 
-			resultsChan <- reply.Results
-			statsChan <- reply.Stats
-		}(i, patients[start:end])
+			wg.Add(1)
+			go func(workerIndex int, subset []types.Patient) {
+				defer wg.Done()
+
+				args := types.ProcessArgs{Patients: subset}
+				var reply types.ProcessReply
+
+				client := api.clients[workerIndex]
+				errCall := client.Call("WorkerService.ProcessBatch", &args, &reply)
+				if errCall != nil {
+					// Fallback simple a otro worker
+					fbIdx := (workerIndex + 1) % numWorkers
+					errCall = api.clients[fbIdx].Call("WorkerService.ProcessBatch", &args, &reply)
+					if errCall != nil {
+						errChan <- fmt.Errorf("error llamando al worker y fallback: %v", errCall)
+						return
+					}
+				}
+
+				resultsChan <- reply.Results
+			}(i, cacheMissPatients[start:end])
+		}
+
+		wg.Wait()
+		close(resultsChan)
+		close(errChan)
+
+		if len(errChan) > 0 && len(resultsChan) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "Fallo completo de ejecución en workers"}`))
+			return
+		}
+
+		// Consolidar resultados de workers
+		var computedResults []types.PatientResult
+		for res := range resultsChan {
+			computedResults = append(computedResults, res...)
+		}
+
+		// Guardar en base de datos de manera asíncrona para maximizar throughput y caching en Redis
+		if api.dbEnabled && len(computedResults) > 0 {
+			go func(pts []types.Patient, rts []types.PatientResult) {
+				dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer dbCancel()
+				for idx, result := range rts {
+					patient := pts[idx]
+					key := db.GenerateCacheKey(patient)
+					_ = db.SetCachedPrediction(dbCtx, key, result, 10*time.Minute)
+					_ = db.SavePrediction(dbCtx, patient, result)
+				}
+			}(cacheMissPatients, computedResults)
+		}
+
+		// Mapear de vuelta los resultados calculados a sus posiciones originales
+		for idx, result := range computedResults {
+			origIdx := cacheMissIndices[idx]
+			finalResults[origIdx] = result
+		}
 	}
 
-	wg.Wait()
-	close(resultsChan)
-	close(statsChan)
-	close(errChan)
+	elapsed := time.Since(predictStart)
 
-	if len(errChan) > 0 && len(resultsChan) == 0 {
-		firstErr := <-errChan
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(fmt.Sprintf(`{"error": "%s"}`, firstErr.Error())))
-		return
-	}
+	// Registrar métricas de latencia de forma segura
+	atomic.AddInt64(&api.totalRequests, int64(len(patients)))
+	atomic.AddInt64(&api.totalLatencyNs, elapsed.Nanoseconds())
 
-	var allResults []types.PatientResult
-	for res := range resultsChan {
-		allResults = append(allResults, res...)
-	}
-
-	var allStats []types.WorkerStats
-	for stat := range statsChan {
-		allStats = append(allStats, stat)
-	}
-
-	elapsed := time.Since(startTime)
-
+	// Responder al cliente
 	response := struct {
 		Results        []types.PatientResult `json:"results"`
-		WorkerStats    []types.WorkerStats   `json:"workerStats"`
 		ProcessingTime string                `json:"processingTime"`
+		Source         string                `json:"source"` // Indica si fue resuelto de cache o red
 	}{
-		Results:        allResults,
-		WorkerStats:    allStats,
+		Results:        finalResults,
 		ProcessingTime: elapsed.String(),
-	}
-
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "Error al codificar la respuesta JSON"}`))
-		return
+		Source:         fmt.Sprintf("Resolved %d from cache, %d from worker cluster", len(patients)-numMissed, numMissed),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(responseBytes)
+	json.NewEncoder(w).Encode(response)
+}
+
+// WSMetricsHandler maneja las conexiones WebSockets del panel de administrador
+func (api *APIServer) WSMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[master-ws] Error al actualizar a WebSocket: %v", err)
+		return
+	}
+
+	api.mu.Lock()
+	api.wsClients[conn] = true
+	api.mu.Unlock()
+
+	log.Printf("[master-ws] Nuevo cliente registrado. Total: %d", len(api.wsClients))
+
+	// Hilo de lectura para detectar cierres
+	go func(c *websocket.Conn) {
+		defer func() {
+			c.Close()
+			api.mu.Lock()
+			delete(api.wsClients, c)
+			api.mu.Unlock()
+			log.Printf("[master-ws] Cliente desconectado.")
+		}()
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				break
+			}
+		}
+	}(conn)
+}
+
+// startMetricsBroadcaster lanza un loop que difunde métricas cada 1.5s
+func (api *APIServer) startMetricsBroadcaster() {
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	go func() {
+		for range ticker.C {
+			api.mu.Lock()
+			clientsCount := len(api.wsClients)
+			if clientsCount == 0 {
+				api.mu.Unlock()
+				continue
+			}
+
+			// Calcular latencia promedio
+			var avgLatency float64
+			reqs := atomic.LoadInt64(&api.totalRequests)
+			lat := atomic.LoadInt64(&api.totalLatencyNs)
+			if reqs > 0 {
+				avgLatency = float64(lat) / float64(reqs) / 1e6 // Convertir a milisegundos
+			}
+
+			// Simular telemetría dinámica de nodos Workers para visualización en el dashboard
+			cpuUsage := make([]float64, len(api.workerAddrs))
+			for i := range cpuUsage {
+				cpuUsage[i] = 15.0 + math.Sin(float64(time.Now().Unix()+int64(i)))*8.0 + float64(time.Now().UnixNano()%10)
+			}
+
+			metrics := struct {
+				TotalRequests  int64     `json:"totalRequests"`
+				AverageLatency float64   `json:"averageLatencyMs"`
+				ConnectedNodes int       `json:"connectedNodes"`
+				NodeStatuses   []string  `json:"nodeStatuses"`
+				CPUUsage       []float64 `json:"cpuUsage"`
+				Timestamp      time.Time `json:"timestamp"`
+			}{
+				TotalRequests:  reqs,
+				AverageLatency: avgLatency,
+				ConnectedNodes: len(api.clients),
+				NodeStatuses:   api.workerAddrs,
+				CPUUsage:       cpuUsage,
+				Timestamp:      time.Now(),
+			}
+			api.mu.Unlock()
+
+			data, err := json.Marshal(metrics)
+			if err != nil {
+				continue
+			}
+
+			// Broadcast
+			api.mu.Lock()
+			for conn := range api.wsClients {
+				err := conn.WriteMessage(websocket.TextMessage, data)
+				if err != nil {
+					conn.Close()
+					delete(api.wsClients, conn)
+				}
+			}
+			api.mu.Unlock()
+		}
+	}()
 }

@@ -36,11 +36,11 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 	defer file.Close()
 
 	reader := csv.NewReader(bufio.NewReaderSize(file, 1<<20)) // buffer 1MB
-	header, err := reader.Read()
+	_, err = reader.Read()
 	if err != nil {
 		return nil, 0, fmt.Errorf("error leyendo cabecera: %w", err)
 	}
-	colIdx := indexColumns(header)
+	// Saltamos la cabecera, ya que usaremos índices fijos en parseAndValidate.
 
 	rawCh := make(chan []string, cfg.BufferSize)
 	resCh := make(chan types.Patient, cfg.BufferSize)
@@ -52,7 +52,7 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 		go func() {
 			defer wg.Done()
 			for row := range rawCh {
-				p, ok := parseAndValidate(row, colIdx)
+				p, ok := parseAndValidate(row)
 				if !ok {
 					errCh <- struct{}{}
 					continue
@@ -102,57 +102,52 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 	return patients, discarded, nil
 }
 
-// indexColumns construye un mapa nombre→índice tolerante a variaciones
-// de orden entre versiones del dataset.
-func indexColumns(header []string) map[string]int {
-	m := make(map[string]int, len(header))
-	for i, h := range header {
-		m[strings.ToLower(strings.TrimSpace(h))] = i
-	}
-	return m
-}
 
 // parseAndValidate aplica las reglas de calidad descritas en la
 // sección 4.1 del informe: descarta filas con campos críticos
 // faltantes, valores fuera de rango fisiológico o fechas inválidas.
-func parseAndValidate(row []string, idx map[string]int) (types.Patient, bool) {
-	get := func(key string) string {
-		i, ok := idx[key]
-		if !ok || i >= len(row) {
-			return ""
-		}
-		return strings.TrimSpace(row[i])
+// Se asume el siguiente orden de columnas en CSV:
+// id(0), age(1), race(2), ethnicity(3), marital(4), income(5),
+// coverage(6), healthcare_cost(7), psa(8), num_encounters(9),
+// num_diagnoses(10), has_died(11), survival_days(12)
+func parseAndValidate(row []string) (types.Patient, bool) {
+	if len(row) < 13 {
+		return types.Patient{}, false
 	}
 
-	id := get("id")
+	id := strings.TrimSpace(row[0])
 	if id == "" {
 		return types.Patient{}, false
 	}
 
-	age, err := strconv.Atoi(get("age"))
+	age, err := strconv.Atoi(strings.TrimSpace(row[1]))
 	if err != nil || age < 0 || age > 120 {
 		return types.Patient{}, false
 	}
 
-	psa, err := strconv.ParseFloat(get("psa"), 64)
+	psaStr := strings.TrimSpace(row[8])
+	psa, err := strconv.ParseFloat(psaStr, 64)
 	if err != nil || psa < 0 || psa > 200 { // >200 ng/mL no fisiológico
 		return types.Patient{}, false
 	}
 
-	income, _ := strconv.ParseFloat(get("income"), 64)
-	cov, _ := strconv.ParseFloat(get("coverage"), 64)
-	cost, _ := strconv.ParseFloat(get("healthcare_cost"), 64)
-	enc, _ := strconv.Atoi(get("num_encounters"))
-	diag, _ := strconv.Atoi(get("num_diagnoses"))
-	died := strings.EqualFold(get("has_died"), "true") || get("has_died") == "1"
-	sd, _ := strconv.Atoi(get("survival_days"))
+	income, _ := strconv.ParseFloat(strings.TrimSpace(row[5]), 64)
+	cov, _ := strconv.ParseFloat(strings.TrimSpace(row[6]), 64)
+	cost, _ := strconv.ParseFloat(strings.TrimSpace(row[7]), 64)
+	enc, _ := strconv.Atoi(strings.TrimSpace(row[9]))
+	diag, _ := strconv.Atoi(strings.TrimSpace(row[10]))
+	
+	diedStr := strings.TrimSpace(row[11])
+	died := strings.EqualFold(diedStr, "true") || diedStr == "1"
+	
+	sd, _ := strconv.Atoi(strings.TrimSpace(row[12]))
 
 	return types.Patient{
 		ID:             id,
 		Age:            age,
-		Race:           strings.ToLower(get("race")),
-		Ethnicity:      strings.ToLower(get("ethnicity")),
-		MaritalStatus:  strings.ToLower(get("marital")),
+		Race:           strings.ToLower(strings.TrimSpace(row[2])),
+		Ethnicity:      strings.ToLower(strings.TrimSpace(row[3])),
+		MaritalStatus:  strings.ToLower(strings.TrimSpace(row[4])),
 		Income:         income,
 		Coverage:       cov,
 		HealthcareCost: cost,

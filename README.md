@@ -11,49 +11,50 @@ El Master también expone una **API REST con autenticación JWT**, caché en **R
 ## Estructura del proyecto
 
 ```
-PC3/
+PC4/
 ├── cmd/
-│   ├── main.go                # Pipeline local: worker pool + pprof
-│   ├── master/
-│   │   └── main.go            # Coordinador RPC + API REST/JWT + WebSockets
-│   ├── worker_node/
-│   │   └── main.go            # Nodo Worker: servidor TCP/RPC + pprof local
-│   └── analyzer/
-│       └── main.go            # Analizador estadístico concurrente (fan-out/fan-in)
+│   ├── main.go               # entry point del pipeline concurrente + pprof
+│   ├── api/
+│   │   └── main.go           # entry point del servidor HTTP (Gin + Redis + JWT)
+│   ├── analyzer/main.go      # analizador estadístico concurrente
+│   ├── worker_node/main.go   # nodo worker del clúster TCP/RPC
+│   └── master/main.go        # nodo coordinador del clúster TCP/RPC
 ├── internal/
-│   ├── loader/
-│   │   └── loader.go          # Carga concurrente del CSV (fan-out/fan-in)
-│   ├── models/
-│   │   ├── mortality.go       # Regresión logística (riesgo de muerte)
-│   │   ├── survival.go        # Regresión lineal (días de supervivencia)
-│   │   └── cost.go            # Regresión lineal (costo de tratamiento en USD)
+│   ├── loader/loader.go      # carga concurrente del CSV (fan-out/fan-in)
+│   ├── models/               # modelos predictivos
+│   │   ├── mortality.go      # regresión logística (mortalidad)
+│   │   ├── survival.go       # estimación de supervivencia
+│   │   ├── cost.go           # estimación de costo de tratamiento
+│   │   └── normalization.go  # normalización Min-Max concurrente del PSA
 │   ├── worker/
-│   │   ├── worker.go          # Goroutine trabajadora del pool local
-│   │   └── pool.go            # Coordinador y particionado del pool local
-│   ├── types/
-│   │   └── types.go           # Patient, PatientResult, WorkerStats, ProcessArgs, ProcessReply
-│   ├── db/
-│   │   └── db.go              # Conexión a MongoDB y Redis, operaciones de caché
-│   └── report/
-│       └── report.go          # Reporte agregado por consola
-├── benchmarks/
-│   └── pipeline_test.go       # Benchmarks formales: 1, 2, 4, 8 y 16 workers
+│   │   ├── worker.go         # goroutine trabajadora
+│   │   └── pool.go           # coordinador y particionado
+│   ├── api/
+│   │   ├── dto/dto.go        # structs JSON (request/response)
+│   │   ├── handlers/
+│   │   │   ├── predict.go    # POST /predict
+│   │   │   └── stats.go      # GET /stats + POST /login
+│   │   └── middleware/
+│   │       ├── auth.go       # generación y validación JWT (HS256)
+│   │       └── cache.go      # middleware Redis (SHA-256 key, TTL 5 min)
+│   ├── types/types.go        # Patient, PatientResult, WorkerStats
+│   └── report/report.go      # reporte agregado
+├── benchmarks/pipeline_test.go  # go test -bench
 ├── scripts/
-│   ├── setup_synthea.ps1      # Descarga JAR de Synthea y genera datos crudos (Windows)
-│   ├── setup_synthea.sh       # Variante bash (Linux/Mac)
-│   ├── _common.py             # Utilidades compartidas (oversampling, I/O)
-│   ├── generate_patients.py            # → data/patients.csv           (≥1.5M)
-│   ├── generate_encounters.py          # → data/encounters.csv         (≥1.5M)
-│   ├── generate_observations.py        # → data/observations.csv       (≥1.5M)
-│   ├── generate_claims.py              # → data/claims.csv             (≥1.5M)
-│   ├── generate_claims_transactions.py # → data/claims_transactions.csv (≥1.5M)
-│   ├── eda.py                 # Análisis exploratorio + gráficos PNG
-│   └── plot_results.py        # Gráficos de speedup vs workers
-├── data/                      # CSVs y gráficos (no versionados)
-│   └── eda_plots/             # bench_time.png, bench_speedup.png, bench_cpu.png, etc.
-├── frontend/                  # SPA estática servida por Nginx
-├── Dockerfile                 # Multi-stage build: go build → alpine runtime
-├── docker-compose.yml         # 6 servicios: mongodb, redis, master, worker1, worker2, nginx
+│   ├── setup_synthea.ps1     # descarga JAR de Synthea + ejecuta el módulo prostate_cancer
+│   ├── setup_synthea.sh      #   (variante bash)
+│   ├── _common.py            # utilidades compartidas (oversampling, I/O)
+│   ├── generate_patients.py            # data/patients.csv            (>=1.5M)
+│   ├── generate_encounters.py          # data/encounters.csv          (>=1.5M)
+│   ├── generate_observations.py        # data/observations.csv        (>=1.5M)
+│   ├── generate_claims.py              # data/claims.csv              (>=1.5M)
+│   ├── generate_claims_transactions.py # data/claims_transactions.csv (>=1.5M)
+│   ├── eda.py                # análisis exploratorio + gráficos PNG
+│   ├── plot_results.py       # gráficos de speedup vs workers
+│   └── load_test.sh          # prueba de carga con hey (Tarea 9)
+├── data/                     # CSVs y gráficos (no versionados)
+├── Dockerfile
+├── docker-compose.yml
 ├── go.mod
 └── README.md
 ```
@@ -261,12 +262,93 @@ Todos los modelos usan normalización Min-Max concurrente del PSA antes de evalu
 | `PredictSurvival`   | Regresión lineal múlt.| Días estimados de supervivencia |
 | `PredictTreatmentCost` | Regresión lineal múlt. | Costo estimado en USD      |
 
+## API REST (PC4)
+
+### Iniciar el servidor
+
+```bash
+# Requisito: Redis corriendo en localhost:6379
+docker run -p 6379:6379 redis:alpine
+
+# Levantar la API
+go run ./cmd/api
+```
+
+Variables de entorno opcionales:
+
+| Variable     | Default                        | Descripción                     |
+|--------------|--------------------------------|---------------------------------|
+| `JWT_SECRET` | `hospital-bed-dev-secret-...`  | Clave HMAC para firmar tokens   |
+| `REDIS_ADDR` | `localhost:6379`               | Dirección del servidor Redis    |
+| `REDIS_PASS` | _(vacío)_                      | Contraseña de Redis             |
+
+### Endpoints
+
+| Método | Ruta       | Auth | Descripción                          |
+|--------|------------|------|--------------------------------------|
+| POST   | `/login`   | No   | Obtiene un JWT (válido 24 h)         |
+| POST   | `/predict` | JWT  | Predicción de mortalidad/supervivencia/costo |
+| GET    | `/stats`   | No   | Métricas agregadas del sistema       |
+
+### Uso desde PowerShell (Windows)
+
+**1. Obtener token:**
+```powershell
+$response = Invoke-RestMethod -Method POST -Uri "http://localhost:8080/login" -ContentType "application/json" -Body '{"username":"admin","password":"hospital2024"}'
+$token = $response.token
+```
+
+**2. Hacer una predicción:**
+```powershell
+Invoke-RestMethod -Method POST -Uri "http://localhost:8080/predict" -ContentType "application/json" -Headers @{ Authorization = "Bearer $token" } -Body '{"age":65,"race":"white","income":55000,"psa_level":8.5,"coverage":0.75,"num_encounters":6,"num_diagnoses":2}'
+```
+
+**3. Ver métricas del sistema:**
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/stats"
+```
+
+### Respuesta de `/predict`
+
+```json
+{
+  "patient_id":        "API-REQUEST",
+  "mortality_risk":    0.399,
+  "survival_estimate": 2959,
+  "treatment_cost":    38200,
+  "cached":            false
+}
+```
+
+`cached: true` indica que la respuesta fue servida desde Redis sin invocar el pipeline.
+
+### Prueba de carga (Tarea 9)
+
+```bash
+go install github.com/rakyll/hey@latest
+bash scripts/load_test.sh
+```
+
+El script ejecuta dos escenarios: 1000 peticiones con 50 concurrentes (cache hit) y 500 peticiones con 20 concurrentes (cache miss). El objetivo es P99 < 100 ms.
+
+---
+
 ## Git Flow
 
 El repositorio sigue el modelo de Driessen (2010):
 
-- `main`      → versiones liberadas (tags por entrega: `pc3`, `pc4`, `tb2`)
-- `develop`   → integración continua
-- `feature/*` → cada funcionalidad (ej. `feature/worker-pool`, `feature/api-rest`)
-- `release/*` → preparación de cada entrega
-- `hotfix/*`  → arreglos urgentes sobre `main`
+- `main`     → versiones liberadas (tags por entrega: `pc3`, `pc4`, `tb2`).
+- `develop`  → integración continua.
+- `feature/*` → cada funcionalidad (ej. `feature/worker-pool`, `feature/pprof`, `feature/API`).
+- `release/*` → preparación de cada entrega.
+- `hotfix/*`  → arreglos urgentes sobre `main`.
+
+## Roadmap
+
+- **PC3 (este entregable):** cargador concurrente, worker pool,
+  modelos heurísticos, profiling, benchmark.
+- **PC4:** sustitución de modelos heurísticos por XGBoost / Cox /
+  Gradient Boosting reales; API REST con JWT; MongoDB + Redis;
+  comunicación TCP nodo-coordinador.
+- **TB2:** Frontend SPA en React; dashboards de impacto social;
+  evaluación experimental final.

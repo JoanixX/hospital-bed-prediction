@@ -527,7 +527,7 @@ func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var wg sync.WaitGroup
-		resultsChan := make(chan []types.PatientResult, numWorkers)
+		workerResults := make([][]types.PatientResult, numWorkers)
 		errChan := make(chan error, numWorkers)
 
 		chunkSize := numMissed / numWorkers
@@ -559,30 +559,41 @@ func (api *APIServer) PredictHandler(w http.ResponseWriter, r *http.Request) {
 					fbIdx := (workerIndex + 1) % numWorkers
 					errCall = api.clients[fbIdx].Call("WorkerService.ProcessBatch", &args, &reply)
 					if errCall != nil {
-						errChan <- fmt.Errorf("error llamando al worker y fallback: %v", errCall)
+						errChan <- fmt.Errorf("error llamando al worker %d y fallback: %v", workerIndex, errCall)
 						return
 					}
 				}
 
-				resultsChan <- reply.Results
+				workerResults[workerIndex] = reply.Results
 			}(i, cacheMissPatients[start:end])
 		}
 
 		wg.Wait()
-		close(resultsChan)
 		close(errChan)
 
-		if len(errChan) > 0 && len(resultsChan) == 0 {
+		// Verificar si alguna partición requerida falló
+		anyFailed := false
+		for i := 0; i < numWorkers; i++ {
+			start := i * chunkSize
+			if start < numMissed && workerResults[i] == nil {
+				anyFailed = true
+				break
+			}
+		}
+
+		if anyFailed {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error": "Fallo completo de ejecución en workers"}`))
+			w.Write([]byte(`{"error": "Fallo de ejecución en los workers de cálculo"}`))
 			return
 		}
 
-		// Consolidar resultados de workers
+		// Consolidar resultados en el orden original secuencial
 		var computedResults []types.PatientResult
-		for res := range resultsChan {
-			computedResults = append(computedResults, res...)
+		for i := 0; i < numWorkers; i++ {
+			if workerResults[i] != nil {
+				computedResults = append(computedResults, workerResults[i]...)
+			}
 		}
 
 		// Guardar en base de datos de manera asíncrona para maximizar throughput y caching en Redis

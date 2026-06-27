@@ -1,5 +1,5 @@
 # ---- build stage ----
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 ARG APP_DIR=master
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -13,4 +13,3 @@ WORKDIR /app
 COPY --from=builder /out/app /app/app
 EXPOSE 8080 8081 6060 6061
 ENTRYPOINT ["/app/app"]
-

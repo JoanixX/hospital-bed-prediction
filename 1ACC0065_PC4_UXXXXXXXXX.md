@@ -1,4 +1,4 @@
-**Universidad Peruana de Ciencias Aplicadas**
+﻿**Universidad Peruana de Ciencias Aplicadas**
 
 ![Upc Logo][image1]
 
@@ -582,6 +582,166 @@ El ecosistema completo ha sido contenedorizado utilizando Docker. Se provee un a
 | ![][image51] |
 | Inicialización del Redis y del frontend |
 | ![][image52] |
+
+#### **Logs de Inicialización del Clúster (docker compose up -d):**
+```bash
+$ docker compose up -d
+ Network hbp_network Creating
+ Network hbp_network Created
+ Container hbp_mongodb Creating
+ Container hbp_worker1 Creating
+ Container hbp_redis Creating
+ Container hbp_worker2 Creating
+ Container hbp_worker1 Created
+ Container hbp_worker2 Created
+ Container hbp_mongodb Created
+ Container hbp_redis Created
+ Container hbp_master Creating
+ Container hbp_api Creating
+ Container hbp_api Created
+ Container hbp_master Created
+ Container hbp_frontend Creating
+ Container hbp_frontend Created
+ Container hbp_worker1 Starting
+ Container hbp_worker2 Starting
+ Container hbp_mongodb Starting
+ Container hbp_redis Starting
+ Container hbp_worker1 Started
+ Container hbp_worker2 Started
+ Container hbp_mongodb Started
+ Container hbp_redis Started
+ Container hbp_worker1 Healthy
+ Container hbp_worker2 Healthy
+ Container hbp_mongodb Healthy
+ Container hbp_redis Healthy
+ Container hbp_master Starting
+ Container hbp_api Starting
+ Container hbp_api Started
+ Container hbp_master Started
+ Container hbp_frontend Starting
+ Container hbp_frontend Started
+```
+
+#### **Estado de los Contenedores Activos (docker compose ps):**
+```bash
+$ docker compose ps
+NAME           IMAGE                             COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+hbp_api        hospital-bed-prediction-api       "/app/app -addr=:808…"   api       23 seconds ago   Up 7 seconds              6060-6061/tcp, 8081/tcp, 0.0.0.0:8090->8080/tcp
+hbp_frontend   nginx:alpine                      "/docker-entrypoint.…"   nginx     22 seconds ago   Up 5 seconds              0.0.0.0:8082->80/tcp
+hbp_master     hospital-bed-prediction-master    "/app/app -api -work…"   master    23 seconds ago   Up 7 seconds              0.0.0.0:6060->6060/tcp, 0.0.0.0:8080->8080/tcp
+hbp_mongodb    mongo:4.4                         "docker-entrypoint.s…"   mongodb   28 seconds ago   Up 19 seconds (healthy)   0.0.0.0:27017->27017/tcp
+hbp_redis      redis:7-alpine                    "docker-entrypoint.s…"   redis     28 seconds ago   Up 20 seconds (healthy)   0.0.0.0:6379->6379/tcp
+hbp_worker1    hospital-bed-prediction-worker1   "/app/app -addr=:808…"   worker1   28 seconds ago   Up 20 seconds (healthy)   6060-6061/tcp, 8080-8081/tcp
+hbp_worker2    hospital-bed-prediction-worker2   "/app/app -addr=:808…"   worker2   28 seconds ago   Up 20 seconds (healthy)   6060-6061/tcp, 8080-8081/tcp
+```
+
+#### **Logs del Nodo de Cálculo ML (docker logs hbp_worker1):**
+```bash
+$ docker logs hbp_worker1
+2026/06/27 02:53:54 [worker-1] Servidor pprof activo en http://:6061/debug/pprof/
+2026/06/27 02:53:54 [worker-1] Servidor TCP/RPC escuchando en :8081...
+2026/06/27 02:54:19 [worker-1] Procesados 1 pacientes en 407.234µs
+2026/06/27 02:54:20 [worker-1] Procesados 1 pacientes en 389.035µs
+2026/06/27 02:54:20 [worker-1] Procesados 1 pacientes en 236.158µs
+```
+
+#### **Evidencia de Persistencia Histórica en MongoDB:**
+```javascript
+$ docker exec -i hbp_mongodb mongo hospital --eval "printjson(db.predictions.findOne())"
+MongoDB shell version v4.4.30
+connecting to: mongodb://127.0.0.1:27017/hospital
+{
+	"_id" : ObjectId("6a3eec6fbf1f97c5ff9f38ba"),
+	"timestamp" : ISODate("2026-06-26T21:17:35.255Z"),
+	"patientId" : "WARMUP",
+	"patient" : {
+		"id" : "WARMUP",
+		"age" : 65,
+		"race" : "white",
+		"income" : 55000,
+		"coverage" : 0.75
+	},
+	"mortalityRisk" : 0.09621554171069287,
+	"survivalEstimate" : 3635,
+	"treatmentCost" : 19900,
+	"workerId" : 1
+}
+```
+
+#### **Evidencia de Claves Cacheadas en Redis:**
+```bash
+$ docker exec -i hbp_redis redis-cli KEYS "*"
+1) "pred:72:black:0.000000:32000.000000:0:0"
+2) "pred:65:white:0.000000:55000.000000:0:0"
+```
+
+#### **Consola de Ejecución de Pruebas de Carga y Latencia (hey):**
+```bash
+$ bash scripts/load_test.sh
+════════════════════════════════════════════════════
+  Prueba de Carga — Hospital Bed Prediction API
+  Objetivo: P99 < 100ms
+  Target:   http://localhost:8080
+════════════════════════════════════════════════════
+
+[1/4] Obteniendo token JWT...
+Token obtenido: eyJhbGciOiJIUzI1NiIsInR5cCI6Ik...
+
+[2/4] Warmup (5 peticiones para pre-llenar Redis)...
+Warmup completado.
+
+[3/4] Escenario A — 1000 req, 50 concurrentes (cache hit esperado)...
+
+Summary:
+  Total:	0.3498 secs
+  Slowest:	0.0598 secs
+  Fastest:	0.0007 secs
+  Average:	0.0160 secs
+  Requests/sec:	2859.0859
+  
+  Total data:	219044 bytes
+  Size/request:	219 bytes
+
+Latency distribution:
+  10% in 0.0038 secs
+  25% in 0.0082 secs
+  50% in 0.0138 secs
+  75% in 0.0205 secs
+  90% in 0.0319 secs
+  95% in 0.0392 secs
+  99% in 0.0543 secs (Meta P99 < 100ms CUMPLIDA)
+
+Status code distribution:
+  [200]	1000 responses
+
+[4/4] Escenario B — 500 req, 20 concurrentes (payloads variados, cache miss)...
+
+Summary:
+  Total:	0.1717 secs
+  Slowest:	0.0281 secs
+  Fastest:	0.0007 secs
+  Average:	0.0062 secs
+  Requests/sec:	2911.5438
+
+Latency distribution:
+  10% in 0.0017 secs
+  25% in 0.0028 secs
+  50% in 0.0048 secs
+  75% in 0.0082 secs
+  90% in 0.0126 secs
+  95% in 0.0163 secs
+  99% in 0.0224 secs
+
+Status code distribution:
+  [200]	500 responses
+
+── Métricas del sistema post-test ──
+{
+    "status": "healthy",
+    "workers_connected": 2,
+    "db_connected": true
+}
+```
 
 ## **4.9.	Interfaz de Usuario (SPA) y Visualización en Tiempo Real** {#4.9.-interfaz-de-usuario-(spa)-y-visualización-en-tiempo-real}
 

@@ -15,9 +15,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -129,37 +131,13 @@ func rawBodyReader() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var raw []byte
 		if c.Request.Body != nil {
-			// Leer manualmente sin cerrar el body
-			buf := make([]byte, 0, 512)
-			tmp := make([]byte, 128)
-			for {
-				n, err := c.Request.Body.Read(tmp)
-				buf = append(buf, tmp[:n]...)
-				if err != nil {
-					break
-				}
+			var err error
+			raw, err = io.ReadAll(c.Request.Body)
+			if err == nil {
+				c.Request.Body = io.NopCloser(bytes.NewReader(raw))
 			}
-			raw = buf
-			// Restaurar el body para que ShouldBindJSON funcione en el handler
-			c.Request.Body = noopCloser{reader: raw}
 		}
 		c.Set("rawBody", raw)
 		c.Next()
 	}
 }
-
-// noopCloser implementa io.ReadCloser sobre un slice de bytes.
-type noopCloser struct {
-	reader []byte
-	pos    int
-}
-
-func (n noopCloser) Read(p []byte) (int, error) {
-	if n.pos >= len(n.reader) {
-		return 0, fmt.Errorf("EOF")
-	}
-	copied := copy(p, n.reader[n.pos:])
-	n.pos += copied
-	return copied, nil
-}
-func (noopCloser) Close() error { return nil }

@@ -1,32 +1,22 @@
-// Package worker implementa el patrón Worker Pool del clúster ML.
-// Cada worker es una goroutine independiente que recibe una partición
-// del dataset y aplica los tres modelos predictivos en secuencia.
+// Package worker implementa el worker pool de INFERENCIA. Tras el
+// entrenamiento, cada worker (goroutine) aplica los modelos ya entrenados
+// a una partición de pacientes sin contención: acumula sus resultados en
+// un slice local y envía el lote completo al canal al terminar.
 package worker
 
 import (
-	"sync" 
+	"sync"
 	"time"
 
-	"github.com/JoanixX/hospital-bed-prediction/internal/models"
+	"github.com/JoanixX/hospital-bed-prediction/internal/ml"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 )
 
-// Run procesa una partición de pacientes acumulando los resultados en
-// un slice local (sin contención con otros workers) y enviando el lote
-// completo al canal `batches` cuando termina. Esto evita que el canal
-// de resultados se convierta en un serializador con N productores y 1
-// consumidor.
-//
-// Parámetros:
-//   - id:        identificador del worker (1..N).
-//   - partition: subconjunto del dataset asignado a este worker.
-//   - batches:   canal de salida con el slice completo de resultados.
-//   - stats:     canal de salida con las métricas operativas.
-//   - wg:        WaitGroup que coordina el cierre del pool.
+// Run aplica los modelos entrenados a una partición de pacientes.
 func Run(
 	id int,
 	partition []types.Patient,
-	normalizedPSAs []float64,
+	models *ml.TrainedModels,
 	batches chan<- []types.PatientResult,
 	stats chan<- types.WorkerStats,
 	wg *sync.WaitGroup,
@@ -35,19 +25,8 @@ func Run(
 
 	start := time.Now()
 	batch := make([]types.PatientResult, len(partition))
-
 	for i, p := range partition {
-		var normPSA float64
-		if i < len(normalizedPSAs) {
-			normPSA = normalizedPSAs[i]
-		}
-		batch[i] = types.PatientResult{
-			PatientID:        p.ID,
-			MortalityRisk:    models.PredictMortality(p, normPSA),
-			SurvivalEstimate: models.PredictSurvival(p, normPSA),
-			TreatmentCost:    models.PredictTreatmentCost(p, normPSA),
-			WorkerID:         id,
-		}
+		batch[i] = models.PredictPatient(p, id)
 	}
 
 	batches <- batch

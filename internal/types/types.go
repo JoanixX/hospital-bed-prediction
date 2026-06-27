@@ -59,3 +59,74 @@ type ProcessReply struct {
 	Results []PatientResult
 	Stats   WorkerStats
 }
+
+
+// ===================================================================
+// Tipos del protocolo RPC para el ENTRENAMIENTO DISTRIBUIDO
+// (master coordina, workers calculan gradientes parciales por shard).
+// ===================================================================
+
+// ScalerParams transporta los parámetros del estandarizador global
+// (media/desviación por característica) que el Master calcula una sola
+// vez y reparte a todos los Workers para que featuricen su shard de
+// forma idéntica. Sin esto, los gradientes de distintos nodos no serían
+// promediables.
+type ScalerParams struct {
+	Mean []float64
+	Std  []float64
+}
+
+// LoadShardArgs envía a un Worker su partición del dataset ya featurizada
+// y estandarizada, junto con los tres objetivos. El Worker la conserva en
+// memoria entre épocas para no retransmitir datos en cada iteración.
+type LoadShardArgs struct {
+	X          [][]float64
+	YMortality []float64
+	YSurvival  []float64 // estandarizado (escala del modelo)
+	YCost      []float64 // estandarizado (escala del modelo)
+}
+
+// LoadShardReply confirma la recepción del shard.
+type LoadShardReply struct {
+	N int // número de ejemplos almacenados en el shard
+}
+
+// GradientArgs pide al Worker el gradiente parcial de un modelo para un
+// vector de pesos dado. Kind ∈ {"mortality","survival","cost"}.
+type GradientArgs struct {
+	Kind    string
+	Weights []float64
+	L2      float64
+}
+
+// GradientReply devuelve la suma (no promediada) del gradiente parcial,
+// la pérdida acumulada y el número de ejemplos del shard.
+type GradientReply struct {
+	GradSum []float64
+	Loss    float64
+	N       int
+}
+
+// ModelBundle transporta los pesos entrenados de los tres modelos más el
+// estandarizador, para que el Worker pueda atender inferencia distribuida
+// tras el entrenamiento.
+type ModelBundle struct {
+	Scaler       ScalerParams
+	WMortality   []float64
+	WSurvival    []float64
+	WCost        []float64
+	SurvMean     float64
+	SurvStd      float64
+	CostMean     float64
+	CostStd      float64
+}
+
+// SetModelArgs difunde a un Worker el modelo entrenado completo para que
+// pueda atender inferencia distribuida tras el entrenamiento.
+type SetModelArgs struct {
+	Bundle ModelBundle
+}
+
+type SetModelReply struct {
+	OK bool
+}

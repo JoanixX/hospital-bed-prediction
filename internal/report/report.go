@@ -1,6 +1,6 @@
 // Package report genera el reporte agregado del pipeline en formato
 // legible por consola y, opcionalmente, en JSON para consumo posterior
-// por la API REST integrada.
+// por la API REST (PC4).
 package report
 
 import (
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JoanixX/hospital-bed-prediction/internal/ml"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 )
 
@@ -68,5 +69,44 @@ func Print(results []types.PatientResult, stats []types.WorkerStats) {
 			r.PatientID, r.WorkerID, r.MortalityRisk*100,
 			r.SurvivalEstimate, r.TreatmentCost)
 	}
+	fmt.Println(sep)
+}
+
+// PrintTraining imprime el reporte del entrenamiento distribuido: tamaño
+// de los conjuntos, convergencia de la pérdida por época y métricas en test.
+func PrintTraining(rep ml.TrainReport) {
+	sep := strings.Repeat("=", 70)
+	fmt.Println()
+	fmt.Println(sep)
+	fmt.Println("              REPORTE DE ENTRENAMIENTO DISTRIBUIDO")
+	fmt.Println(sep)
+	fmt.Printf("Muestras: %d entrenamiento | %d test    Épocas: %d\n",
+		rep.NumTrain, rep.NumTest, rep.Epochs)
+
+	printCurve := func(name string, h []float64) {
+		if len(h) == 0 {
+			return
+		}
+		step := len(h) / 5
+		if step == 0 {
+			step = 1
+		}
+		fmt.Printf("\n  Convergencia %s (pérdida por época):\n    ", name)
+		for e := 0; e < len(h); e += step {
+			fmt.Printf("ep%d=%.4f  ", e, h[e])
+		}
+		fmt.Printf("ep%d=%.4f\n", len(h)-1, h[len(h)-1])
+	}
+	printCurve("mortalidad (log-loss)", rep.MortLoss)
+	printCurve("supervivencia (MSE)", rep.SurvLoss)
+	printCurve("costo (MSE)", rep.CostLoss)
+
+	fmt.Println("\n  Métricas en test:")
+	fmt.Printf("   Mortalidad (logística)  : AUC=%.3f  Accuracy=%.3f  LogLoss=%.4f\n",
+		rep.Mortality.AUC, rep.Mortality.Accuracy, rep.Mortality.LogLoss)
+	fmt.Printf("   Supervivencia (lineal)  : R²=%.3f  RMSE=%.0f días  MAE=%.0f días\n",
+		rep.Survival.R2, rep.Survival.RMSE, rep.Survival.MAE)
+	fmt.Printf("   Costo (lineal)          : R²=%.3f  RMSE=$%.0f  MAE=$%.0f\n",
+		rep.Cost.R2, rep.Cost.RMSE, rep.Cost.MAE)
 	fmt.Println(sep)
 }

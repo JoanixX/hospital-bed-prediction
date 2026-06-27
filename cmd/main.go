@@ -1,111 +1,151 @@
-// Comando principal del pipeline concurrente de predicción de cáncer
-// de próstata. Lanza un servidor pprof asíncrono en :6060 para
-// auditar CPU, memoria, goroutines y contención de mutex; carga el
-// dataset desde CSV; ejecuta el worker pool; e imprime el reporte.
+// Comando del pipeline LOCAL (un proceso): carga concurrente del dataset,
+// ENTRENAMIENTO real de los tres modelos por descenso de gradiente
+// paralelizado con goroutines, e inferencia paralela con el worker pool.
+// Sirve como línea base monolítica frente al clúster distribuido
+// (cmd/master + cmd/worker_node), que usa exactamente las mismas
+// primitivas de ml pero reparte el gradiente entre nodos.
 //
 // Uso:
 //
-//	go run ./cmd -workers=8 -dataset=./data/patients.csv
-//	go run ./cmd -sequential -dataset=./data/patients.csv   (línea base)
+//	go run ./cmd -dataset=data/patients.csv -workers=8 -epochs=100
+//	go run ./cmd -synthetic=200000 -workers=4
+//	go run ./cmd -dataset=data/patients.csv -sequential   (línea base)
 package main
 
 import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"net/http"
-	_ "net/http/pprof" // registra handlers en /debug/pprof/
-	"os"
+	_ "net/http/pprof"
 	"runtime"
 	"time"
 
 	"github.com/JoanixX/hospital-bed-prediction/internal/loader"
+	"github.com/JoanixX/hospital-bed-prediction/internal/ml"
 	"github.com/JoanixX/hospital-bed-prediction/internal/report"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 	"github.com/JoanixX/hospital-bed-prediction/internal/worker"
 )
 
 func main() {
-	workers := flag.Int("workers", runtime.NumCPU(), "número de goroutines del worker pool")
-	dataset := flag.String("dataset", "./data/patients.csv", "ruta al CSV de pacientes")
-	sequential := flag.Bool("sequential", false, "ejecutar en modo secuencial (línea base)")
+	workers := flag.Int("workers", runtime.NumCPU(), "goroutines para entrenamiento e inferencia")
+	dataset := flag.String("dataset", "", "ruta al CSV de pacientes (vacío => sintético)")
+	synthetic := flag.Int("synthetic", 200_000, "tamaño del dataset sintético si dataset=''")
+	epochs := flag.Int("epochs", 100, "épocas de entrenamiento")
+	lr := flag.Float64("lr", 0.5, "tasa de aprendizaje")
+	l2 := flag.Float64("l2", 1e-4, "regularización L2")
+	sequential := flag.Bool("sequential", false, "forzar 1 worker (línea base)")
 	pprofAddr := flag.String("pprof", "localhost:6060", "dirección del servidor pprof")
-	loop := flag.Int("loop", 1, "repetir el procesamiento N veces (útil para capturar perfiles pprof significativos)")
 	flag.Parse()
 
-	// Habilita los perfiles de contención de mutex y de bloqueo (por defecto
-	// están desactivados, lo que hace que /debug/pprof/mutex devuelva un
-	// perfil vacío). Con fracción/tasa = 1 se registra cada evento.
 	runtime.SetMutexProfileFraction(1)
 	runtime.SetBlockProfileRate(1)
 
-	// 1. Servidor pprof asíncrono.
 	go func() {
-		log.Printf("[pprof] servidor de profiling activo en %s", *pprofAddr)
-		log.Printf("[pprof] endpoints disponibles en http://%s/debug/pprof/", *pprofAddr)
+		log.Printf("[pprof] activo en http://%s/debug/pprof/", *pprofAddr)
 		if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
-			log.Printf("[pprof] no se pudo iniciar el servidor: %v", err)
+			log.Printf("[pprof] no se pudo iniciar: %v", err)
 		}
 	}()
-	time.Sleep(150 * time.Millisecond) // dar tiempo al servidor a registrarse
+	time.Sleep(120 * time.Millisecond)
 
-	fmt.Println("====================================================")
-	fmt.Println("  Sistema Distribuido - Cáncer de Próstata (Integrado)")
-	fmt.Println("  Modelos: Mortalidad | Supervivencia | Costo")
-	fmt.Println("====================================================")
-
-	// 2. Cargar dataset.
-	if _, err := os.Stat(*dataset); os.IsNotExist(err) {
-		log.Fatalf("[loader] Error: No se encontró el dataset en '%s'. Asegúrate de generar los CSVs reales primero.\n", *dataset)
-	}
-
-	var patients []types.Patient
-	var err error
-	var discarded int
-	fmt.Printf("\n[loader] cargando dataset concurrente desde %s ...\n", *dataset)
-	patients, discarded, err = loader.LoadConcurrent(loader.LoadConfig{
-		Path:       *dataset,
-		NumWorkers: *workers,
-		BufferSize: 1024,
-	})
-	if err != nil {
-		log.Fatalf("[loader] error: %v", err)
-	}
-	fmt.Printf("[loader] %d registros válidos cargados, %d descartados\n",
-		len(patients), discarded)
-
-	// 3. Procesamiento (paralelo o secuencial).
 	numWorkers := *workers
 	if *sequential {
 		numWorkers = 1
-		fmt.Println("\n[mode] EJECUCIÓN SECUENCIAL (línea base de comparación)")
+	}
+
+	fmt.Println("====================================================")
+	fmt.Println("  Cáncer de Próstata — Entrenamiento + Inferencia")
+	fmt.Println("  Modelos: Mortalidad (logística) | Supervivencia | Costo (lineales)")
+	fmt.Println("====================================================")
+
+	// 1. Cargar dataset.
+	var patients []types.Patient
+	if *dataset != "" {
+		fmt.Printf("\n[loader] cargando %s (concurrente, %d workers)...\n", *dataset, numWorkers)
+		ps, discarded, err := loader.LoadConcurrent(loader.LoadConfig{
+			Path: *dataset, NumWorkers: numWorkers, BufferSize: 1024,
+		})
+		if err != nil {
+			log.Fatalf("[loader] error: %v", err)
+		}
+		patients = ps
+		fmt.Printf("[loader] %d válidos, %d descartados\n", len(patients), discarded)
 	} else {
-		fmt.Printf("\n[mode] EJECUCIÓN CONCURRENTE con %d workers\n", numWorkers)
+		fmt.Printf("\n[loader] generando %d pacientes sintéticos...\n", *synthetic)
+		patients = generateSyntheticPatients(*synthetic)
 	}
 
-	pool := worker.Pool{NumWorkers: numWorkers, Verbose: *loop == 1}
-	if *loop > 1 {
-		fmt.Printf("[loop] repitiendo procesamiento %d veces para profiling\n", *loop)
-	}
-	start := time.Now()
-	var results []types.PatientResult
-	var stats []types.WorkerStats
-	for i := 0; i < *loop; i++ {
-		results, stats = pool.Process(patients)
-	}
-	elapsed := time.Since(start)
+	// 2. ENTRENAMIENTO (gradiente descendente paralelo con goroutines).
+	cfg := ml.TrainConfig{Epochs: *epochs, LR: *lr, L2: *l2, NumWorkers: numWorkers}
+	fmt.Printf("\n[train] entrenando 3 modelos: %d épocas, lr=%.3g, L2=%.1g, %d workers\n",
+		cfg.Epochs, cfg.LR, cfg.L2, numWorkers)
+	tStart := time.Now()
+	models, rep := ml.TrainAll(patients, cfg, 0.2)
+	fmt.Printf("[train] entrenamiento completado en %v\n", time.Since(tStart).Round(time.Millisecond))
+	report.PrintTraining(rep)
 
-	// 4. Reporte.
+	// 3. INFERENCIA paralela sobre todos los pacientes.
+	fmt.Printf("\n[infer] inferencia paralela (%d workers) sobre %d pacientes\n",
+		numWorkers, len(patients))
+	pool := worker.Pool{NumWorkers: numWorkers, Models: models, Verbose: true}
+	iStart := time.Now()
+	results, stats := pool.Process(patients)
+	iElapsed := time.Since(iStart)
+
 	report.Print(results, stats)
-	fmt.Printf("\n[timing] tiempo total de procesamiento: %v\n", elapsed.Round(time.Millisecond))
-	fmt.Printf("[timing] throughput aproximado: %.0f pacientes/s\n",
-		float64(len(patients))/elapsed.Seconds())
-
-	// 5. Mantener vivo el servidor pprof para captura post-mortem.
-	fmt.Println("\n[pprof] manteniendo servidor activo 30s para captura de perfiles...")
-	fmt.Printf("[pprof]   CPU    : go tool pprof http://%s/debug/pprof/profile?seconds=20\n", *pprofAddr)
-	fmt.Printf("[pprof]   Heap   : go tool pprof http://%s/debug/pprof/heap\n", *pprofAddr)
-	fmt.Printf("[pprof]   Mutex  : go tool pprof http://%s/debug/pprof/mutex\n", *pprofAddr)
-	fmt.Printf("[pprof]   Goroutines: http://%s/debug/pprof/goroutine?debug=1\n", *pprofAddr)
-	time.Sleep(30 * time.Second)
+	fmt.Printf("\n[timing] inferencia: %v (%.0f pacientes/s)\n",
+		iElapsed.Round(time.Millisecond), float64(len(patients))/iElapsed.Seconds())
 }
+
+// generateSyntheticPatients produce datos con SEÑAL real (no ruido puro)
+// para que los modelos tengan algo que aprender cuando no hay CSV.
+func generateSyntheticPatients(n int) []types.Patient {
+	races := []string{"white", "black", "hispanic", "asian", "other"}
+	r := rand.New(rand.NewSource(42))
+	patients := make([]types.Patient, n)
+	for i := 0; i < n; i++ {
+		age := 45 + r.Intn(40)
+		psa := r.Float64() * 20
+		income := 20000 + r.Float64()*80000
+		coverage := 0.4 + r.Float64()*0.6
+		enc := 1 + r.Intn(30)
+		diag := 1 + r.Intn(8)
+
+		// Mortalidad: probabilidad creciente con edad, PSA, diagnósticos.
+		z := -6.0 + 0.05*float64(age) + 0.12*psa + 0.20*float64(diag) - 0.00002*income
+		pDie := 1.0 / (1.0 + math.Exp(-z))
+		died := r.Float64() < pDie
+
+		// Supervivencia (días): decrece con edad/PSA, crece con cobertura.
+		surv := 4200 - 18*float64(age) - 90*psa + 1500*coverage + r.NormFloat64()*200
+		if surv < 90 {
+			surv = 90
+		}
+		// Costo (USD): crece con PSA, encuentros, diagnósticos.
+		cost := 6000 + 1500*psa + 600*float64(enc) + 2200*float64(diag) +
+			0.05*income + r.NormFloat64()*1500
+		if cost < 0 {
+			cost = 0
+		}
+
+		patients[i] = types.Patient{
+			ID:             fmt.Sprintf("PAT-%07d", i+1),
+			Age:            age,
+			Race:           races[r.Intn(len(races))],
+			Income:         income,
+			HealthcareCost: cost,
+			Coverage:       coverage,
+			PSALevel:       psa,
+			NumEncounters:  enc,
+			NumDiagnoses:   diag,
+			HasDied:        died,
+			SurvivalDays:   int(surv),
+		}
+	}
+	return patients
+}
+

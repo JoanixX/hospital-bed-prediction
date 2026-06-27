@@ -19,9 +19,9 @@ import (
 
 // LoadConfig agrupa los parámetros del cargador concurrente.
 type LoadConfig struct {
-	Path       string
-	NumWorkers int
-	BufferSize int
+	Path        string
+	NumWorkers  int
+	BufferSize  int
 }
 
 // LoadConcurrent carga el archivo CSV en paralelo. Devuelve el slice
@@ -36,11 +36,11 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 	defer file.Close()
 
 	reader := csv.NewReader(bufio.NewReaderSize(file, 1<<20)) // buffer 1MB
-	_, err = reader.Read()
+	header, err := reader.Read()
 	if err != nil {
 		return nil, 0, fmt.Errorf("error leyendo cabecera: %w", err)
 	}
-	// Saltamos la cabecera, ya que usaremos índices fijos en parseAndValidate.
+	colIdx := indexColumns(header)
 
 	rawCh := make(chan []string, cfg.BufferSize)
 	resCh := make(chan types.Patient, cfg.BufferSize)
@@ -52,7 +52,7 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 		go func() {
 			defer wg.Done()
 			for row := range rawCh {
-				p, ok := parseAndValidate(row)
+				p, ok := parseAndValidate(row, colIdx)
 				if !ok {
 					errCh <- struct{}{}
 					continue
@@ -102,51 +102,57 @@ func LoadConcurrent(cfg LoadConfig) ([]types.Patient, int, error) {
 	return patients, discarded, nil
 }
 
+// indexColumns construye un mapa nombre→índice tolerante a variaciones
+// de orden entre versiones del dataset.
+func indexColumns(header []string) map[string]int {
+	m := make(map[string]int, len(header))
+	for i, h := range header {
+		m[strings.ToLower(strings.TrimSpace(h))] = i
+	}
+	return m
+}
+
 // parseAndValidate aplica las reglas de calidad descritas en la
 // sección 4.1 del informe: descarta filas con campos críticos
 // faltantes, valores fuera de rango fisiológico o fechas inválidas.
-// Se asume el siguiente orden de columnas en CSV:
-// id(0), age(1), race(2), ethnicity(3), marital(4), income(5),
-// coverage(6), healthcare_cost(7), psa(8), num_encounters(9),
-// num_diagnoses(10), has_died(11), survival_days(12)
-func parseAndValidate(row []string) (types.Patient, bool) {
-	if len(row) < 13 {
-		return types.Patient{}, false
+func parseAndValidate(row []string, idx map[string]int) (types.Patient, bool) {
+	get := func(key string) string {
+		i, ok := idx[key]
+		if !ok || i >= len(row) {
+			return ""
+		}
+		return strings.TrimSpace(row[i])
 	}
 
-	id := strings.TrimSpace(row[0])
+	id := get("id")
 	if id == "" {
 		return types.Patient{}, false
 	}
 
-	age, err := strconv.Atoi(strings.TrimSpace(row[1]))
+	age, err := strconv.Atoi(get("age"))
 	if err != nil || age < 0 || age > 120 {
 		return types.Patient{}, false
 	}
 
-	psaStr := strings.TrimSpace(row[8])
-	psa, err := strconv.ParseFloat(psaStr, 64)
+	psa, err := strconv.ParseFloat(get("psa"), 64)
 	if err != nil || psa < 0 || psa > 200 { // >200 ng/mL no fisiológico
 		return types.Patient{}, false
 	}
 
-	income, _ := strconv.ParseFloat(strings.TrimSpace(row[5]), 64)
-	cov, _ := strconv.ParseFloat(strings.TrimSpace(row[6]), 64)
-	cost, _ := strconv.ParseFloat(strings.TrimSpace(row[7]), 64)
-	enc, _ := strconv.Atoi(strings.TrimSpace(row[9]))
-	diag, _ := strconv.Atoi(strings.TrimSpace(row[10]))
-
-	diedStr := strings.TrimSpace(row[11])
-	died := strings.EqualFold(diedStr, "true") || diedStr == "1"
-
-	sd, _ := strconv.Atoi(strings.TrimSpace(row[12]))
+	income, _ := strconv.ParseFloat(get("income"), 64)
+	cov, _ := strconv.ParseFloat(get("coverage"), 64)
+	cost, _ := strconv.ParseFloat(get("healthcare_cost"), 64)
+	enc, _ := strconv.Atoi(get("num_encounters"))
+	diag, _ := strconv.Atoi(get("num_diagnoses"))
+	died := strings.EqualFold(get("has_died"), "true") || get("has_died") == "1"
+	sd, _ := strconv.Atoi(get("survival_days"))
 
 	return types.Patient{
 		ID:             id,
 		Age:            age,
-		Race:           strings.ToLower(strings.TrimSpace(row[2])),
-		Ethnicity:      strings.ToLower(strings.TrimSpace(row[3])),
-		MaritalStatus:  strings.ToLower(strings.TrimSpace(row[4])),
+		Race:           strings.ToLower(get("race")),
+		Ethnicity:      strings.ToLower(get("ethnicity")),
+		MaritalStatus:  strings.ToLower(get("marital")),
 		Income:         income,
 		Coverage:       cov,
 		HealthcareCost: cost,

@@ -1,146 +1,152 @@
-// Package main implementa el nodo Worker ("Esclavo") de nuestro clúster.
-// Levanta un servidor RPC sobre TCP que recibe lotes de pacientes,
-// ejecuta un procesamiento local concurrente e intensivo en CPU,
-// y devuelve los resultados junto a las métricas del nodo.
+// Package main implementa el nodo Worker del clúster de ENTRENAMIENTO
+// DISTRIBUIDO. Levanta un servidor RPC sobre TCP que:
+//
+//   - LoadShard:       recibe su partición del dataset (ya featurizada y
+//                      estandarizada) y la conserva en memoria.
+//   - ComputeGradient: dado un vector de pesos, calcula el gradiente
+//                      PARCIAL del modelo sobre su shard usando fan-out de
+//                      goroutines (concurrencia intra-nodo).
+//   - SetModel/Predict: tras el entrenamiento, atiende inferencia con los
+//                       modelos ya entrenados.
+//
+// El Master agrega los gradientes parciales de todos los Workers por época
+// (data-parallel SGD / parameter server). Expone pprof para auditar CPU,
+// memoria y contención de mutex.
 package main
 
 import (
 	"flag"
 	"log"
-	"math"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // Habilita pprof
+	_ "net/http/pprof"
 	"net/rpc"
 	"runtime"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/JoanixX/hospital-bed-prediction/internal/models"
+	"github.com/JoanixX/hospital-bed-prediction/internal/ml"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 )
 
-// WorkerService define el servicio RPC que expondrá este nodo.
+// WorkerService es el servicio RPC expuesto por el nodo. Conserva el
+// estado del shard y el bundle de modelos entrenados entre llamadas.
 type WorkerService struct {
-	ID int
+	ID             int
+	shard          atomic.Pointer[ml.ShardState]
+	trained        atomic.Pointer[ml.TrainedModels]
+	gradientsServed int64
 }
 
-// ProcessBatch es el método expuesto por el servidor RPC para procesar un lote de pacientes.
-func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.ProcessReply) error {
-	startTime := time.Now()
-	numPatients := len(args.Patients)
+// LoadShard almacena la partición del dataset asignada a este worker.
+func (ws *WorkerService) LoadShard(args *types.LoadShardArgs, reply *types.LoadShardReply) error {
+	state := &ml.ShardState{X: args.X, YMort: args.YMortality, YSurv: args.YSurvival, YCost: args.YCost}
+	ws.shard.Store(state)
+	reply.N = len(state.X)
+	log.Printf("[worker-%d] Shard cargado: %d ejemplos, %d características", ws.ID, len(state.X), ml.NumFeatures())
+	return nil
+}
 
-	if numPatients == 0 {
-		reply.Results = []types.PatientResult{}
-		reply.Stats = types.WorkerStats{
-			WorkerID:        ws.ID,
-			PatientsHandled: 0,
-			ProcessingTime:  0,
-		}
+// ComputeGradient calcula el gradiente parcial del modelo `Kind` sobre el
+// shard local con los pesos recibidos. Concurrencia intra-nodo: fan-out de
+// runtime.NumCPU() goroutines.
+func (ws *WorkerService) ComputeGradient(args *types.GradientArgs, reply *types.GradientReply) error {
+	state := ws.shard.Load()
+	if state == nil {
+		reply.N = 0
 		return nil
 	}
+	g := state.PartialGradient(ml.KindFromString(args.Kind), args.Weights, runtime.NumCPU())
+	reply.GradSum, reply.Loss, reply.N = g.Sum, g.Loss, g.N
+	atomic.AddInt64(&ws.gradientsServed, 1)
+	return nil
+}
 
-	// 1. Normalización Min-Max concurrente del PSA antes de evaluar los modelos
-	normalizedPSAs := models.ConcurrentlyNormalizePSA(args.Patients)
+// SetModel recibe del Master los modelos entrenados para inferencia.
+func (ws *WorkerService) SetModel(args *types.ModelBundle, reply *types.LoadShardReply) error {
+	ws.trained.Store(ml.TrainedFromBundle(*args))
+	reply.N = 1
+	log.Printf("[worker-%d] Modelos entrenados recibidos; listo para inferencia", ws.ID)
+	return nil
+}
 
-	// Pre-asignamos el slice con capacidad exacta para evitar re-asignaciones en memoria (contención y GC)
-	results := make([]types.PatientResult, numPatients)
-
-	// Determinamos el número de workers locales (goroutines) para paralelizar en el hardware del nodo.
-	numLocalWorkers := runtime.NumCPU()
-	var wg sync.WaitGroup
-
-	chunkSize := numPatients / numLocalWorkers
-	if chunkSize == 0 {
-		chunkSize = 1
+// ProcessBatch atiende inferencia distribuida: aplica los modelos
+// entrenados a un lote de pacientes usando fan-out de goroutines.
+func (ws *WorkerService) ProcessBatch(args *types.ProcessArgs, reply *types.ProcessReply) error {
+	start := time.Now()
+	tm := ws.trained.Load()
+	if tm == nil {
+		reply.Results = []types.PatientResult{}
+		reply.Stats = types.WorkerStats{WorkerID: ws.ID}
+		return nil
 	}
+	n := len(args.Patients)
+	results := make([]types.PatientResult, n)
 
-	// Fan-out local de la CPU del Worker utilizando goroutines
-	for i := 0; i < numLocalWorkers; i++ {
-		start := i * chunkSize
-		if start >= numPatients {
+	workers := runtime.NumCPU()
+	chunk := (n + workers - 1) / workers
+	if chunk == 0 {
+		chunk = 1
+	}
+	done := make(chan struct{}, workers)
+	launched := 0
+	for w := 0; w < workers; w++ {
+		s := w * chunk
+		if s >= n {
 			break
 		}
-		end := start + chunkSize
-		if i == numLocalWorkers-1 || end > numPatients {
-			end = numPatients
+		e := s + chunk
+		if e > n {
+			e = n
 		}
-
-		wg.Add(1)
-		go func(localWorkerID int, patientsSubset []types.Patient, normalizedSubset []float64, resultsTarget []types.PatientResult) {
-			defer wg.Done()
-
-			for idx, p := range patientsSubset {
-				// Simulación de cálculo intensivo en CPU para emular entrenamiento/evaluación matricial profunda
-				var cpuBurn float64
-				for k := 0; k < 5000; k++ {
-					cpuBurn += math.Sin(float64(k)) * math.Cos(float64(p.Age))
-				}
-				_ = cpuBurn // Evitar advertencia del compilador
-
-				// Escribimos en el slice en base a su offset aislado sin contención de memoria
-				resultsTarget[idx] = types.PatientResult{
-					PatientID:        p.ID,
-					MortalityRisk:    models.PredictMortality(p, normalizedSubset[idx]),
-					SurvivalEstimate: models.PredictSurvival(p, normalizedSubset[idx]),
-					TreatmentCost:    models.PredictTreatmentCost(p, normalizedSubset[idx]),
-					WorkerID:         ws.ID, // Identificador de este nodo worker
-				}
+		launched++
+		go func(s, e int) {
+			for i := s; i < e; i++ {
+				results[i] = tm.PredictPatient(args.Patients[i], ws.ID)
 			}
-		}(i+1, args.Patients[start:end], normalizedPSAs[start:end], results[start:end])
+			done <- struct{}{}
+		}(s, e)
 	}
-
-	wg.Wait()
+	for i := 0; i < launched; i++ {
+		<-done
+	}
 
 	reply.Results = results
-	reply.Stats = types.WorkerStats{
-		WorkerID:        ws.ID,
-		PatientsHandled: numPatients,
-		ProcessingTime:  time.Since(startTime),
-	}
-
-	log.Printf("[worker-%d] Procesados %d pacientes en %v\n", ws.ID, numPatients, reply.Stats.ProcessingTime)
+	reply.Stats = types.WorkerStats{WorkerID: ws.ID, PatientsHandled: n, ProcessingTime: time.Since(start)}
 	return nil
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:8081", "Dirección TCP para levantar el servidor RPC")
-	pprofAddr := flag.String("pprof", "localhost:6061", "Dirección TCP para levantar el servidor de profiling pprof")
-	workerID := flag.Int("id", 1, "Identificador único para este nodo worker")
+	addr := flag.String("addr", "localhost:8081", "Dirección TCP del servidor RPC")
+	pprofAddr := flag.String("pprof", "localhost:6061", "Dirección del servidor pprof")
+	workerID := flag.Int("id", 1, "Identificador único del nodo worker")
 	flag.Parse()
 
-	// Iniciar servidor pprof asíncrono para monitoreo de performance
 	go func() {
-		log.Printf("[worker-%d] Servidor pprof activo en http://%s/debug/pprof/\n", *workerID, *pprofAddr)
+		log.Printf("[worker-%d] pprof activo en http://%s/debug/pprof/", *workerID, *pprofAddr)
 		if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
-			log.Printf("[worker-%d] Servidor pprof error: %v\n", *workerID, err)
+			log.Printf("[worker-%d] pprof error: %v", *workerID, err)
 		}
 	}()
 
-	// Registrar servicio RPC
 	ws := &WorkerService{ID: *workerID}
-	err := rpc.Register(ws)
-	if err != nil {
-		log.Fatalf("[worker-%d] Error al registrar servicio RPC: %v", *workerID, err)
+	if err := rpc.Register(ws); err != nil {
+		log.Fatalf("[worker-%d] error registrando RPC: %v", *workerID, err)
 	}
 
-	// Abrir puerto TCP para escuchar al Master
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("[worker-%d] Error de red escuchando en %s: %v", *workerID, *addr, err)
+		log.Fatalf("[worker-%d] error escuchando en %s: %v", *workerID, *addr, err)
 	}
 	defer listener.Close()
+	log.Printf("[worker-%d] Servidor TCP/RPC de entrenamiento escuchando en %s", *workerID, *addr)
 
-	log.Printf("[worker-%d] Servidor TCP/RPC escuchando en %s...\n", *workerID, *addr)
-
-	// Bucle receptor de conexiones
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("[worker-%d] Error al aceptar conexión: %v\n", *workerID, err)
+			log.Printf("[worker-%d] error aceptando conexión: %v", *workerID, err)
 			continue
 		}
-		// Servir la conexión de forma concurrente
 		go rpc.ServeConn(conn)
 	}
 }

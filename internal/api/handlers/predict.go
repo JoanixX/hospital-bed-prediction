@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/JoanixX/hospital-bed-prediction/internal/api/dto"
+	"github.com/JoanixX/hospital-bed-prediction/internal/ml"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 	"github.com/JoanixX/hospital-bed-prediction/internal/worker"
 )
@@ -19,6 +20,15 @@ var (
 	sumSurvival    atomic.Value // float64
 	sumCost        atomic.Value // float64
 )
+
+// trainedModels guarda los modelos de ML entrenados que la API usa para
+// inferir. Se inyecta una sola vez al arrancar (cmd/api entrena y llama a
+// SetModels). Es un atomic.Pointer para lectura concurrente sin locks.
+var trainedModels atomic.Pointer[ml.TrainedModels]
+
+// SetModels inyecta los modelos entrenados que usarán los handlers de
+// predicción. Debe llamarse antes de aceptar tráfico.
+func SetModels(m *ml.TrainedModels) { trainedModels.Store(m) }
 
 func init() {
 	sumMortality.Store(float64(0))
@@ -72,9 +82,19 @@ func Predict(c *gin.Context) {
 		patient.ID = "API-REQUEST"
 	}
 
-	// Reutilizamos el pool existente con 1 worker para una sola predicción.
-	// Para batch, se puede recibir []PredictRequest y ajustar NumWorkers.
-	pool := worker.Pool{NumWorkers: 1, Verbose: false}
+	// Recuperamos los modelos entrenados inyectados al arrancar.
+	models := trainedModels.Load()
+	if models == nil {
+		c.JSON(http.StatusServiceUnavailable, dto.ErrorResponse{
+			Error: "modelos aún no entrenados; reintente en unos segundos",
+		})
+		return
+	}
+
+	// Reutilizamos el pool de inferencia con 1 worker para una sola
+	// predicción. Para batch, se puede recibir []PredictRequest y ajustar
+	// NumWorkers.
+	pool := worker.Pool{NumWorkers: 1, Models: models, Verbose: false}
 	results, _ := pool.Process([]types.Patient{patient})
 
 	if len(results) == 0 {

@@ -1,10 +1,13 @@
 package worker
+
 import (
 	"fmt"
 	"sync"
 
+	"github.com/JoanixX/hospital-bed-prediction/internal/models"
 	"github.com/JoanixX/hospital-bed-prediction/internal/types"
 )
+
 // Pool coordina la ejecución paralela de N workers sobre el dataset
 // completo. Aplica el patrón map-reduce: particiona los datos (map),
 // despacha cada partición a una goroutine (parallel reduce) y agrega
@@ -24,6 +27,8 @@ func (p Pool) Process(patients []types.Patient) ([]types.PatientResult, []types.
 	batches := make(chan []types.PatientResult, p.NumWorkers)
 	stats := make(chan types.WorkerStats, p.NumWorkers)
 	var wg sync.WaitGroup
+
+	normalizedPSAs := models.ConcurrentlyNormalizePSA(patients)
 
 	partitionSize := len(patients) / p.NumWorkers
 	if partitionSize == 0 {
@@ -45,7 +50,7 @@ func (p Pool) Process(patients []types.Patient) ([]types.PatientResult, []types.
 			end = len(patients) // el último worker absorbe el remanente
 		}
 		wg.Add(1)
-		go Run(i+1, patients[start:end], batches, stats, &wg)
+		go Run(i+1, patients[start:end], normalizedPSAs[start:end], batches, stats, &wg)
 		if p.Verbose {
 			fmt.Printf("[pool]   worker %d lanzado -> rango [%d, %d)\n", i+1, start, end)
 		}

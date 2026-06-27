@@ -33,9 +33,9 @@ import (
 )
 
 func main() {
-	addr      := flag.String("addr", ":8080", "dirección donde escucha la API")
+	addr := flag.String("addr", ":8080", "dirección donde escucha la API")
 	redisAddr := flag.String("redis", "localhost:6379", "host:port de Redis")
-	ginMode   := flag.String("mode", "debug", "modo Gin: debug | release")
+	ginMode := flag.String("mode", "debug", "modo Gin: debug | release")
 	flag.Parse()
 
 	// Variables de entorno tienen prioridad sobre flags
@@ -76,9 +76,9 @@ func main() {
 		predictHandlers := gin.HandlersChain{handlers.Predict}
 		if rdb != nil {
 			predictHandlers = gin.HandlersChain{
-				rawBodyReader(),                 // guarda el body crudo en el contexto
-				middleware.RedisCache(rdb),      // intenta hit; pasa si miss
-				handlers.Predict,                // procesa y cachea la respuesta
+				rawBodyReader(),            // guarda el body crudo en el contexto
+				middleware.RedisCache(rdb), // intenta hit; pasa si miss
+				handlers.Predict,           // procesa y cachea la respuesta
 			}
 		}
 		protected.POST("/predict", predictHandlers...)

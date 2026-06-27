@@ -58,7 +58,7 @@ func ConcurrentlyNormalizePSA(patients []types.Patient) []float64 {
 				if psa > MaxPSABound {
 					psa = MaxPSABound
 				}
-				
+
 				// Normalización Min-Max: escalar a [0.0, 1.0]
 				normalizedVal := (psa - MinPSABound) / (MaxPSABound - MinPSABound)
 				normalized[idx] = normalizedVal

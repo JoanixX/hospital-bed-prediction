@@ -37,13 +37,13 @@ type PredictResponse struct {
 
 // StatsResponse agrega métricas operativas del pipeline y Redis.
 type StatsResponse struct {
-	TotalProcessed  int     `json:"total_processed"`
-	CacheHits       int64   `json:"cache_hits"`
-	CacheMisses     int64   `json:"cache_misses"`
-	AvgMortality    float64 `json:"avg_mortality_risk"`
-	AvgSurvival     float64 `json:"avg_survival_days"`
-	AvgCost         float64 `json:"avg_treatment_cost"`
-	UptimeSeconds   float64 `json:"uptime_seconds"`
+	TotalProcessed int     `json:"total_processed"`
+	CacheHits      int64   `json:"cache_hits"`
+	CacheMisses    int64   `json:"cache_misses"`
+	AvgMortality   float64 `json:"avg_mortality_risk"`
+	AvgSurvival    float64 `json:"avg_survival_days"`
+	AvgCost        float64 `json:"avg_treatment_cost"`
+	UptimeSeconds  float64 `json:"uptime_seconds"`
 }
 
 // ─────────────────────────────────────────────

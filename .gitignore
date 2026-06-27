@@ -5,6 +5,8 @@
 /data/eda_plots/
 /data/load_tests_results/
 CAPTURAS_PENDIENTES.md
+PC4_Code/
+TF_Code/
 
 # Synthea (descargado bajo demanda por scripts/setup_synthea.*)
 /data/synthea_jar/
@@ -13,7 +15,8 @@ CAPTURAS_PENDIENTES.md
 /data/graphviz/
 /data/profiles/
 *.jar
-pipeline.exe
+*.exe
+COMMITS_PC4_INTEGRACION.md
 
 # Profiles pprof
 *.prof

@@ -17,6 +17,7 @@ TF_Code/
 *.jar
 *.exe
 COMMITS_PC4_INTEGRACION.md
+GUIA_MODELO.md
 
 # Profiles pprof
 *.prof
